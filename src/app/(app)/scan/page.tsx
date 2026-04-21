@@ -1,3 +1,5 @@
-export default function ScanPage() {
-  return <div>TODO: スキャン（Phase 4）</div>
+import ScanPage from '@/components/ScanPage'
+
+export default function ScanRoute() {
+  return <ScanPage />
 }
