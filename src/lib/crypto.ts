@@ -6,8 +6,9 @@ function toB64(buf: ArrayBuffer): string {
   return btoa(String.fromCharCode(...new Uint8Array(buf)))
 }
 
-function fromB64(s: string): Uint8Array {
-  return Uint8Array.from(atob(s), (c) => c.charCodeAt(0))
+function fromB64(s: string): Uint8Array<ArrayBuffer> {
+  const arr = Uint8Array.from(atob(s), (c) => c.charCodeAt(0))
+  return new Uint8Array(arr.buffer.slice(arr.byteOffset, arr.byteOffset + arr.byteLength) as ArrayBuffer)
 }
 
 // "v1:<iv_b64>:<ct_b64>"
@@ -15,15 +16,15 @@ function encodeWrapped(iv: ArrayBuffer, ct: ArrayBuffer): string {
   return `v1:${toB64(iv)}:${toB64(ct)}`
 }
 
-function decodeWrapped(wrapped: string): { iv: Uint8Array; ct: Uint8Array } {
+function decodeWrapped(wrapped: string): { iv: Uint8Array<ArrayBuffer>; ct: Uint8Array<ArrayBuffer> } {
   const [, ivB64, ctB64] = wrapped.split(':')
   return { iv: fromB64(ivB64), ct: fromB64(ctB64) }
 }
 
 // ── Random ─────────────────────────────────────────────────────────────────
 
-export function randomBytes(n: number): Uint8Array {
-  const buf = new Uint8Array(n)
+export function randomBytes(n: number): Uint8Array<ArrayBuffer> {
+  const buf = new Uint8Array(new ArrayBuffer(n))
   crypto.getRandomValues(buf)
   return buf
 }
@@ -80,7 +81,7 @@ export async function unwrapKey(wrappingKey: CryptoKey, wrapped: string): Promis
 
 export async function deriveWrappingKeyFromPIN(
   pin: string,
-  salt: Uint8Array,
+  salt: Uint8Array<ArrayBuffer> | ArrayBuffer,
 ): Promise<CryptoKey> {
   const enc = new TextEncoder()
   const keyMaterial = await crypto.subtle.importKey(
@@ -128,10 +129,10 @@ export async function deriveWrappingKeyFromSignature(
 // ── HKDF generic ──────────────────────────────────────────────────────────
 
 export async function hkdfDerive(
-  ikm: BufferSource,
+  ikm: Uint8Array<ArrayBuffer> | ArrayBuffer,
   info: string,
   length: number,
-): Promise<Uint8Array> {
+): Promise<Uint8Array<ArrayBuffer>> {
   const keyMaterial = await crypto.subtle.importKey('raw', ikm, 'HKDF', false, ['deriveBits'])
   const bits = await crypto.subtle.deriveBits(
     {
@@ -143,13 +144,13 @@ export async function hkdfDerive(
     keyMaterial,
     length * 8,
   )
-  return new Uint8Array(bits)
+  return new Uint8Array(bits as ArrayBuffer)
 }
 
 // ── HMAC-SHA256 (Blind Indexing) ───────────────────────────────────────────
 
 export async function hmacIndex(
-  hmacKeyBytes: Uint8Array,
+  hmacKeyBytes: Uint8Array<ArrayBuffer>,
   value: string,
 ): Promise<string> {
   const key = await crypto.subtle.importKey(

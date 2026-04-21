@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 import { Geist } from 'next/font/google'
 import './globals.css'
+import { VaultProvider } from '@/context/VaultContext'
 
 const geist = Geist({
   subsets: ['latin'],
@@ -20,7 +21,7 @@ export default function RootLayout({
   return (
     <html lang="ja" className={`${geist.variable} dark`}>
       <body className="font-[var(--font-geist),system-ui,sans-serif]">
-        {children}
+        <VaultProvider>{children}</VaultProvider>
       </body>
     </html>
   )

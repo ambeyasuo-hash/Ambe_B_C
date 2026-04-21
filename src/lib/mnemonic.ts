@@ -1,7 +1,7 @@
 'use client'
 
 import { generateMnemonic, mnemonicToSeedSync, validateMnemonic } from '@scure/bip39'
-import { wordlist } from '@scure/bip39/wordlists/english'
+import { wordlist } from '@scure/bip39/wordlists/english.js'
 import { hkdfDerive, deriveWrappingKeyFromPIN } from './crypto'
 
 // ── Generate 24-word mnemonic ─────────────────────────────────────────────
@@ -17,8 +17,11 @@ export function validateMnemonic24(phrase: string): boolean {
 
 // ── Derive seed bytes from mnemonic ───────────────────────────────────────
 
-export function mnemonicToSeed(phrase: string): Uint8Array {
-  return mnemonicToSeedSync(phrase)
+export function mnemonicToSeed(phrase: string): Uint8Array<ArrayBuffer> {
+  const src = mnemonicToSeedSync(phrase)
+  const buf = new ArrayBuffer(src.byteLength)
+  new Uint8Array(buf).set(src)
+  return new Uint8Array(buf)
 }
 
 // ── Derive encryption_salt from mnemonic (deterministic, 16 bytes → UUID-like hex) ──

@@ -1,19 +1,40 @@
 'use client'
 
-// Phase 3 で実装するセッション状態
-type AppState = 'UNINITIALIZED' | 'LOCKED' | 'UNLOCKED'
+import { useVault } from '@/context/VaultContext'
+import SecuritySetup from '@/components/auth/SecuritySetup'
+import LockScreen from '@/components/auth/LockScreen'
+import DeviceFrame from '@/components/layout/DeviceFrame'
+import StatusBar from '@/components/layout/StatusBar'
+import BottomNav from '@/components/layout/BottomNav'
+import { useState } from 'react'
+import { useSessionTimer } from '@/hooks/useSessionTimer'
+
+function AppShell() {
+  const { appState } = useVault()
+  const [activeTab, setActiveTab] = useState<'cards' | 'scan' | 'settings'>('cards')
+  const { timerLabel, isUnlocked } = useSessionTimer()
+
+  return (
+    <DeviceFrame>
+      <StatusBar
+        sessionTimer={timerLabel}
+        isUnlocked={isUnlocked}
+      />
+
+      {appState === 'UNINITIALIZED' && <SecuritySetup />}
+      {appState === 'LOCKED' && <LockScreen />}
+      {appState === 'UNLOCKED' && (
+        <div className="flex flex-col flex-1 overflow-hidden relative">
+          <div className="flex-1 overflow-y-auto px-4 py-4">
+            <p style={{ color: 'var(--muted-foreground)' }}>TODO: {activeTab} 画面（Phase 4・5）</p>
+          </div>
+          <BottomNav activeTab={activeTab} onTabChange={setActiveTab} />
+        </div>
+      )}
+    </DeviceFrame>
+  )
+}
 
 export default function Home() {
-  // TODO Phase 3: useVault() から実際の状態を取得する
-  const appState = 'LOCKED' as AppState
-
-  if (appState === 'UNINITIALIZED') {
-    return <div>TODO: SecuritySetup（Phase 3）</div>
-  }
-
-  if (appState === 'LOCKED') {
-    return <div>TODO: LockScreen（Phase 3）</div>
-  }
-
-  return <div>TODO: MainApp（Phase 4・5）</div>
+  return <AppShell />
 }
