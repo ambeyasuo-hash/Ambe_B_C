@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -v \"^--$\")",
+      "Bash(git init *)",
+      "Bash(npx create-next-app@latest . --typescript --tailwind --eslint --app --src-dir --import-alias '@/*' --no-turbopack)",
+      "Bash(npx create-next-app@latest . --typescript --tailwind --eslint --app --src-dir --import-alias '@/*' --no-turbopack --project-name ambe-business-card)",
+      "Bash(cd /tmp)",
+      "Bash(npx create-next-app@latest ambe-business-card --typescript --tailwind --eslint --app --src-dir --import-alias '@/*' --no-turbopack)",
+      "Bash(cp -r /tmp/ambe-business-card/* /c/Users/yasuo/Desktop/Ambe_Business_card/)",
+      "Bash(cp /tmp/ambe-business-card/.* /c/Users/yasuo/Desktop/Ambe_Business_card/)",
+      "Bash(npm install *)",
+      "Bash(git config *)",
+      "Bash(npm run *)",
+      "Bash(git add *)",
+      "Bash(git commit -m 'Phase 1 Task 1-1: Initialize Next.js 15 project with TypeScript, Tailwind, and required dependencies *)"
+    ]
+  }
+}
