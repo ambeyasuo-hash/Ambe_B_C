@@ -63,8 +63,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (typeof window === 'undefined') return
     const hasBundle = hasBundleAlpha() || hasBundlePIN()
-    const hasCredential = hasRegisteredCredential()
-    if (!hasBundle && !hasCredential) {
+    if (!hasBundle) {
       setAppState('UNINITIALIZED')
     } else {
       setAppState('LOCKED')

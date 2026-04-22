@@ -29,10 +29,17 @@ export default function LockScreen() {
     setLoading(true)
     setError('')
     try {
-      const wrappingKey = await assertWebAuthn()
-      const bundle = await loadBundleWithAlpha(wrappingKey)
-      const dataKey = await unlockWithAlpha(wrappingKey, bundle)
-      unlock(dataKey, bundle)
+      const result = await assertWebAuthn()
+      if (result.kind === 'prf') {
+        // PRF 対応端末 (Chrome/Android): 生体認証だけで復号
+        const bundle = await loadBundleWithAlpha(result.wrappingKey)
+        const dataKey = await unlockWithAlpha(result.wrappingKey, bundle)
+        unlock(dataKey, bundle)
+      } else {
+        // PRF 非対応 (iOS Safari 等): 生体認証は通過済み → PIN で復号
+        setError('この端末では生体認証後にPINの入力が必要です')
+        setMode('pin')
+      }
     } catch (e) {
       setError((e as Error).message)
       setMode('pin')

@@ -142,13 +142,16 @@ export default function SecuritySetup() {
       const dataKey = await generateDataKey()
 
       // Derive wrapping keys
-      const assertion = await assertWebAuthn()           // Level 1a
-      const pinSalt = crypto.getRandomValues(new Uint8Array(16))
-      const pinKey  = await deriveWrappingKeyFromPIN(pin, pinSalt) // Level 1b
+      const pinSalt    = crypto.getRandomValues(new Uint8Array(16))
+      const pinKey     = await deriveWrappingKeyFromPIN(pin, pinSalt) // Level 1b (必須)
       const mnemonicKey = await deriveWrappingKeyFromMnemonic(phrase) // Level 2
 
-      // Wrap Data Key with both
-      const wrappedAlpha = await wrapKey(assertion, dataKey)
+      // Level 1a: PRF 対応なら PRF 由来鍵、非対応 (iOS 等) なら PIN 鍵で代替
+      const assertResult = await assertWebAuthn()
+      const alphaKey = assertResult.kind === 'prf' ? assertResult.wrappingKey : pinKey
+
+      // Wrap Data Key
+      const wrappedAlpha = await wrapKey(alphaKey, dataKey)
       const wrappedBeta  = await wrapKey(mnemonicKey, dataKey)
 
       // Assemble bundle
@@ -167,7 +170,7 @@ export default function SecuritySetup() {
       }
 
       // Save to localStorage
-      await saveBundleWithAlpha(assertion, bundle)
+      await saveBundleWithAlpha(alphaKey, bundle)
       await saveBundleWithPIN(pin, bundle)
 
       // Save wrapped keys to Supabase
@@ -187,30 +190,20 @@ export default function SecuritySetup() {
   }
 
   async function handleComplete() {
-    // Reload bundle and unlock
-    const { loadBundleWithPIN } = await import('@/lib/config-bundle')
-    const { unlockWithAlpha } = await import('@/lib/vault')
+    setLoading(true)
+    setError('')
     try {
-      setLoading(true)
-      const assertion = await assertWebAuthn()
-      const bundle = await loadBundleWithPIN(pin) // use PIN as fallback to load
-      const dataKey = await unlockWithAlpha(assertion, bundle)
+      const { loadBundleWithPIN } = await import('@/lib/config-bundle')
+      const { deriveWrappingKeyFromPIN, unwrapKey } = await import('@/lib/crypto')
+      const bundle = await loadBundleWithPIN(pin)
+      const pinSaltHex = localStorage.getItem('config_bundle_pin_salt')!
+      const salt = Uint8Array.from(pinSaltHex.match(/.{2}/g)!.map((h) => parseInt(h, 16)))
+      const pinKey = await deriveWrappingKeyFromPIN(pin, salt)
+      const dataKey = await unwrapKey(pinKey, bundle.wrapped_data_key_alpha)
       unlock(dataKey, bundle)
-    } catch {
-      // PIN unlock fallback
-      try {
-        const cbModule = await import('@/lib/config-bundle')
-        const cryptoModule = await import('@/lib/crypto')
-        const bundle2 = await cbModule.loadBundleWithPIN(pin)
-        const pinSaltHex = localStorage.getItem('config_bundle_pin_salt')!
-        const salt = Uint8Array.from(pinSaltHex.match(/.{2}/g)!.map((h) => parseInt(h, 16)))
-        const pinKey = await cryptoModule.deriveWrappingKeyFromPIN(pin, salt)
-        const dataKey2 = await cryptoModule.unwrapKey(pinKey, bundle2.wrapped_data_key_alpha)
-        unlock(dataKey2, bundle2)
-      } catch (e2) {
-        setError((e2 as Error).message)
-        setLoading(false)
-      }
+    } catch (e) {
+      setError((e as Error).message)
+      setLoading(false)
     }
   }
 
