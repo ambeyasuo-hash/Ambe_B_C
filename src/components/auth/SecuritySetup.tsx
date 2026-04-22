@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { registerWebAuthn, assertWebAuthn, isPrfEnabled } from '@/lib/webauthn'
+import { registerWebAuthn } from '@/lib/webauthn'
 import { generateMnemonic24, deriveWrappingKeyFromMnemonic, deriveEncryptionSalt } from '@/lib/mnemonic'
 import { generateDataKey, wrapKey, deriveWrappingKeyFromPIN } from '@/lib/crypto'
 import { saveBundleWithAlpha, saveBundleWithPIN, type ConfigBundle } from '@/lib/config-bundle'
@@ -134,11 +134,9 @@ export default function SecuritySetup() {
     setLoading(true)
     setError('')
     try {
-      // PRF 対応デバイス (Chrome/Android) のみ assertion を呼ぶ。
-      // no-PRF デバイス (Safari/iOS Chrome) は PIN 鍵で代替するため assertion 不要。
-      // ※ assertWebAuthn はユーザージェスチャー直後に呼ぶ必要があるため先頭に置く。
-      const assertResult = isPrfEnabled() ? await assertWebAuthn() : { kind: 'no-prf' as const }
-
+      // Setup 時は assertWebAuthn() を呼ばない。
+      // 理由: Windows Chrome で Windows Hello と GPM が競合して二重プロンプトが発生する。
+      //       PRF key によるバンドル暗号化は初回 PIN ログイン後にサイレントアップグレードする。
       // Generate mnemonic + encryption_salt (deterministic from mnemonic)
       const phrase = generateMnemonic24()
       const encSalt = await deriveEncryptionSalt(phrase)
@@ -151,8 +149,8 @@ export default function SecuritySetup() {
       const pinKey      = await deriveWrappingKeyFromPIN(pin, pinSalt) // Level 1b
       const mnemonicKey = await deriveWrappingKeyFromMnemonic(phrase)  // Level 2
 
-      // Level 1a: PRF 対応なら PRF 由来鍵、非対応 (iOS 等) なら PIN 鍵で代替
-      const alphaKey = assertResult.kind === 'prf' ? assertResult.wrappingKey : pinKey
+      // setup 時は常に PIN key を alpha key として使用（PRF upgrade は初回 PIN ログイン後）
+      const alphaKey = pinKey
 
       // 各レベルで Data Key を wrap（それぞれ独立した鍵で保護）
       const wrappedAlpha = await wrapKey(alphaKey, dataKey) // Level 1a

@@ -1,9 +1,9 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { assertWebAuthn, hasRegisteredCredential } from '@/lib/webauthn'
-import { loadBundleWithAlpha, loadBundleWithPIN, hasBundleAlpha } from '@/lib/config-bundle'
+import { assertWebAuthn, hasRegisteredCredential, isPrfEnabled } from '@/lib/webauthn'
+import { loadBundleWithAlpha, loadBundleWithPIN, hasBundleAlpha, saveBundleWithAlpha } from '@/lib/config-bundle'
 import { unlockWithAlpha } from '@/lib/vault'
 import { useVault } from '@/context/VaultContext'
 
@@ -17,6 +17,8 @@ export default function LockScreen() {
   const [error, setError] = useState('')
   const [recoveryExpanded, setRecoveryExpanded] = useState(false)
   const [canUseBiometric, setCanUseBiometric] = useState(false)
+  // PRF assertion 成功後、bundle が PIN 暗号化のままだった場合に upgrade するための key 保持
+  const pendingPrfKey = useRef<CryptoKey | null>(null)
 
   // Check localStorage only on client
   useEffect(() => {
@@ -31,12 +33,20 @@ export default function LockScreen() {
     try {
       const result = await assertWebAuthn()
       if (result.kind === 'prf') {
-        // PRF 対応端末 (Chrome/Android): 生体認証だけで復号
-        const bundle = await loadBundleWithAlpha(result.wrappingKey)
-        const dataKey = await unlockWithAlpha(result.wrappingKey, bundle)
-        unlock(dataKey, bundle)
+        // PRF assertion 成功 → bundle が PRF key で暗号化されていれば直接復号
+        try {
+          const bundle = await loadBundleWithAlpha(result.wrappingKey)
+          const dataKey = await unlockWithAlpha(result.wrappingKey, bundle)
+          unlock(dataKey, bundle)
+        } catch {
+          // bundle がまだ PIN key で暗号化されている（初回 PRF ログイン）
+          // PRF key を保持しておき、PIN 入力後にアップグレードする
+          pendingPrfKey.current = result.wrappingKey
+          setError('初回のみPINの入力が必要です（次回から生体認証のみでログインできます）')
+          setMode('pin')
+        }
       } else {
-        // PRF 非対応 (iOS Safari 等): 生体認証は通過済み → PIN で復号
+        // PRF 非対応 (iOS Safari / iOS Chrome): 生体認証は通過済み → PIN で復号
         setError('この端末では生体認証後にPINの入力が必要です')
         setMode('pin')
       }
@@ -57,11 +67,22 @@ export default function LockScreen() {
     try {
       const bundle = await loadBundleWithPIN(pin)
       const { deriveWrappingKeyFromPIN, unwrapKey } = await import('@/lib/crypto')
-      // wrapped_data_key_pin は PIN 専用の wrap。config_bundle_pin_salt と同じ salt で導出した鍵を使用。
       const saltHex = localStorage.getItem('config_bundle_pin_salt')!
       const salt = Uint8Array.from(saltHex.match(/.{2}/g)!.map((h) => parseInt(h, 16)))
       const pinKey = await deriveWrappingKeyFromPIN(pin, salt)
       const dataKey = await unwrapKey(pinKey, bundle.wrapped_data_key_pin)
+
+      // PRF アップグレード: 生体認証成功 + 初回 PIN ログインの場合、
+      // bundle を PRF key で再暗号化して次回から生体認証のみでログインできるようにする
+      if (pendingPrfKey.current) {
+        try {
+          await saveBundleWithAlpha(pendingPrfKey.current, bundle)
+          pendingPrfKey.current = null
+        } catch {
+          // アップグレード失敗は致命的ではない。次回ログイン時に再試行される。
+        }
+      }
+
       unlock(dataKey, bundle)
     } catch {
       setError('PINが正しくありません')
