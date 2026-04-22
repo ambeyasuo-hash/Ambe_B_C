@@ -2,8 +2,7 @@
 
 import { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { registerWebAuthn } from '@/lib/webauthn'
-import { assertWebAuthn } from '@/lib/webauthn'
+import { registerWebAuthn, assertWebAuthn, isPrfEnabled } from '@/lib/webauthn'
 import { generateMnemonic24, deriveWrappingKeyFromMnemonic, deriveEncryptionSalt } from '@/lib/mnemonic'
 import { generateDataKey, wrapKey, deriveWrappingKeyFromPIN } from '@/lib/crypto'
 import { saveBundleWithAlpha, saveBundleWithPIN, type ConfigBundle } from '@/lib/config-bundle'
@@ -135,9 +134,10 @@ export default function SecuritySetup() {
     setLoading(true)
     setError('')
     try {
-      // assertWebAuthn はユーザージェスチャー直後に呼ぶ必要がある。
-      // PBKDF2 等の重い処理を先に行うとブラウザのジェスチャータイムアウトで NotAllowedError になる。
-      const assertResult = await assertWebAuthn()
+      // PRF 対応デバイス (Chrome/Android) のみ assertion を呼ぶ。
+      // no-PRF デバイス (Safari/iOS Chrome) は PIN 鍵で代替するため assertion 不要。
+      // ※ assertWebAuthn はユーザージェスチャー直後に呼ぶ必要があるため先頭に置く。
+      const assertResult = isPrfEnabled() ? await assertWebAuthn() : { kind: 'no-prf' as const }
 
       // Generate mnemonic + encryption_salt (deterministic from mnemonic)
       const phrase = generateMnemonic24()
