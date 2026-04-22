@@ -98,6 +98,15 @@ export function clearBundles(): void {
   localStorage.removeItem(LS_PIN_SALT)
 }
 
+// WebAuthn credential を含む全セットアップデータを削除して初期状態に戻す
+export function clearAllSetupData(): void {
+  localStorage.removeItem(LS_WRAPPED_ALPHA)
+  localStorage.removeItem(LS_WRAPPED_PIN)
+  localStorage.removeItem(LS_PIN_SALT)
+  localStorage.removeItem('webauthn_credential_id')
+  localStorage.removeItem('webauthn_prf_enabled')
+}
+
 // ── .ambe file format (portable, PIN-encrypted) ───────────────────────────
 
 export interface AmbeFile {

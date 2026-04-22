@@ -3,11 +3,11 @@
 import { useState, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { assertWebAuthn, hasRegisteredCredential, isPrfEnabled } from '@/lib/webauthn'
-import { loadBundleWithAlpha, loadBundleWithPIN, hasBundleAlpha, saveBundleWithAlpha } from '@/lib/config-bundle'
+import { loadBundleWithAlpha, loadBundleWithPIN, hasBundleAlpha, saveBundleWithAlpha, clearAllSetupData } from '@/lib/config-bundle'
 import { unlockWithAlpha } from '@/lib/vault'
 import { useVault } from '@/context/VaultContext'
 
-type LockMode = 'biometric' | 'pin' | 'recovery'
+type LockMode = 'biometric' | 'pin' | 'recovery' | 'reset'
 
 export default function LockScreen() {
   const { unlock } = useVault()
@@ -66,14 +66,22 @@ export default function LockScreen() {
     setError('')
     try {
       const bundle = await loadBundleWithPIN(pin)
+
+      // 旧フォーマット検出（wrapped_data_key_pin がない = wrapped_data_key_pin 追加前のデータ）
+      if (!bundle.wrapped_data_key_pin) {
+        setError('保存データが古いフォーマットです。「最初からやり直す」で再設定してください。')
+        setMode('reset')
+        setLoading(false)
+        return
+      }
+
       const { deriveWrappingKeyFromPIN, unwrapKey } = await import('@/lib/crypto')
       const saltHex = localStorage.getItem('config_bundle_pin_salt')!
       const salt = Uint8Array.from(saltHex.match(/.{2}/g)!.map((h) => parseInt(h, 16)))
       const pinKey = await deriveWrappingKeyFromPIN(pin, salt)
       const dataKey = await unwrapKey(pinKey, bundle.wrapped_data_key_pin)
 
-      // PRF アップグレード: 生体認証成功 + 初回 PIN ログインの場合、
-      // bundle を PRF key で再暗号化して次回から生体認証のみでログインできるようにする
+      // PRF アップグレード: 初回 PIN ログイン後に bundle を PRF key で再暗号化
       if (pendingPrfKey.current) {
         try {
           await saveBundleWithAlpha(pendingPrfKey.current, bundle)
@@ -90,6 +98,11 @@ export default function LockScreen() {
     } finally {
       setLoading(false)
     }
+  }
+
+  function handleReset() {
+    clearAllSetupData()
+    window.location.reload()
   }
 
   return (
@@ -199,6 +212,37 @@ export default function LockScreen() {
             )}
           </motion.div>
         )}
+        {mode === 'reset' && (
+          <motion.div
+            key="reset"
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -12 }}
+            className="flex flex-col items-center gap-4 w-full"
+          >
+            <div className="w-full rounded-2xl p-4 text-sm"
+              style={{ background: 'oklch(0.15 0.03 27)', border: '1px solid oklch(0.577 0.245 27.325)', color: 'var(--foreground)' }}>
+              <p className="font-bold mb-1">⚠️ 全データを削除します</p>
+              <p style={{ color: 'var(--muted-foreground)' }}>
+                認証データと設定をすべて削除して最初からやり直します。Supabase内のデータは削除されません。
+              </p>
+            </div>
+            <button
+              onClick={handleReset}
+              className="w-full py-4 rounded-2xl font-bold"
+              style={{ background: 'oklch(0.577 0.245 27.325)', color: 'white' }}
+            >
+              削除して最初からやり直す
+            </button>
+            <button
+              onClick={() => { setMode('biometric'); setError('') }}
+              className="text-sm"
+              style={{ color: 'var(--muted-foreground)' }}
+            >
+              キャンセル
+            </button>
+          </motion.div>
+        )}
       </AnimatePresence>
 
       {error && (
@@ -242,6 +286,14 @@ export default function LockScreen() {
                   {item.label}
                 </button>
               ))}
+              {/* 脱出口: 認証データが壊れた / 古いフォーマットの場合 */}
+              <button
+                onClick={() => setMode('reset')}
+                className="w-full py-3 rounded-xl text-sm font-medium text-left px-4"
+                style={{ background: 'var(--card)', border: '1px solid oklch(0.577 0.245 27.325)', color: 'oklch(0.577 0.245 27.325)' }}
+              >
+                🔄 最初からやり直す
+              </button>
             </motion.div>
           )}
         </AnimatePresence>

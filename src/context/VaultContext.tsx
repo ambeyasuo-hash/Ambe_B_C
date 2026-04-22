@@ -62,8 +62,9 @@ export function VaultProvider({ children }: { children: ReactNode }) {
   // Initialize: determine state from localStorage (client only)
   useEffect(() => {
     if (typeof window === 'undefined') return
-    const hasBundle = hasBundleAlpha() || hasBundlePIN()
-    if (!hasBundle) {
+    // PIN bundle がなければ未完了セットアップ → UNINITIALIZED
+    // alpha bundle だけある（セットアップ途中でクラッシュ等）場合も UNINITIALIZED に倒す
+    if (!hasBundlePIN()) {
       setAppState('UNINITIALIZED')
     } else {
       setAppState('LOCKED')
