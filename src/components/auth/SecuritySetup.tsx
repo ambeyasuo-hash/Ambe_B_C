@@ -77,6 +77,7 @@ export default function SecuritySetup() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [testStatus, setTestStatus] = useState<Record<string, 'idle' | 'testing' | 'ok' | 'fail'>>({})
+  const [pendingDataKey, setPendingDataKey] = useState<CryptoKey | null>(null)
 
   // ── Step 1: Register biometric ──────────────────────────────────────────
 
@@ -172,6 +173,9 @@ export default function SecuritySetup() {
       // Save to localStorage
       await saveBundleWithAlpha(alphaKey, bundle)
       await saveBundleWithPIN(pin, bundle)
+      // LockScreen の PIN 復号で wrapped_data_key_alpha を unwrap するために alpha 用 salt を保存
+      const alphaSaltHex = Array.from(pinSalt).map((b) => b.toString(16).padStart(2, '0')).join('')
+      localStorage.setItem('config_bundle_alpha_pin_salt', alphaSaltHex)
 
       // Save wrapped keys to Supabase
       await saveVaultRow(bundle, {
@@ -180,6 +184,7 @@ export default function SecuritySetup() {
         wrapped_data_key_beta: wrappedBeta,
       })
 
+      setPendingDataKey(dataKey)
       setMnemonic(phrase)
       setStep(4)
     } catch (e) {
@@ -190,17 +195,16 @@ export default function SecuritySetup() {
   }
 
   async function handleComplete() {
+    if (!pendingDataKey) {
+      setError('セットアップデータが見つかりません。やり直してください。')
+      return
+    }
     setLoading(true)
     setError('')
     try {
       const { loadBundleWithPIN } = await import('@/lib/config-bundle')
-      const { deriveWrappingKeyFromPIN, unwrapKey } = await import('@/lib/crypto')
       const bundle = await loadBundleWithPIN(pin)
-      const pinSaltHex = localStorage.getItem('config_bundle_pin_salt')!
-      const salt = Uint8Array.from(pinSaltHex.match(/.{2}/g)!.map((h) => parseInt(h, 16)))
-      const pinKey = await deriveWrappingKeyFromPIN(pin, salt)
-      const dataKey = await unwrapKey(pinKey, bundle.wrapped_data_key_alpha)
-      unlock(dataKey, bundle)
+      unlock(pendingDataKey, bundle)
     } catch (e) {
       setError((e as Error).message)
       setLoading(false)
