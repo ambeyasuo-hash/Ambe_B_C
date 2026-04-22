@@ -12,8 +12,9 @@ export interface ConfigBundle {
   supabase: { url: string; anon_key: string }
   azure: { endpoint: string; key: string }
   gemini: { key: string }
-  wrapped_data_key_alpha: string
-  wrapped_data_key_beta: string
+  wrapped_data_key_alpha: string   // WebAuthn PRF 由来鍵で wrap
+  wrapped_data_key_pin: string     // PIN 由来鍵で wrap (Level 1b)
+  wrapped_data_key_beta: string    // Mnemonic 由来鍵で wrap (Level 2)
   userEmail: string
   fontSizePreference: 'small' | 'standard' | 'large' | 'xlarge'
 }
@@ -43,14 +44,16 @@ export async function saveBundleWithAlpha(
   localStorage.setItem(LS_WRAPPED_ALPHA, wrapped)
 }
 
+// salt を外から渡すことで wrapped_data_key_pin の導出と同じ salt を使える。
+// 省略時は内部でランダム生成する（後方互換）。
 export async function saveBundleWithPIN(
   pin: string,
   bundle: ConfigBundle,
+  existingSalt?: Uint8Array<ArrayBuffer>,
 ): Promise<void> {
-  const salt = randomBytes(16)
+  const salt = existingSalt ?? randomBytes(16)
   const wrappingKey = await deriveWrappingKeyFromPIN(pin, salt)
   const wrapped = await aesEncryptString(wrappingKey, serialize(bundle))
-  // Store salt as hex alongside the wrapped bundle
   const saltHex = Array.from(salt).map((b) => b.toString(16).padStart(2, '0')).join('')
   localStorage.setItem(LS_WRAPPED_PIN, wrapped)
   localStorage.setItem(LS_PIN_SALT, saltHex)

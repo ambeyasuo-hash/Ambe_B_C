@@ -147,16 +147,17 @@ export default function SecuritySetup() {
       const dataKey = await generateDataKey()
 
       // Derive wrapping keys
-      const pinSalt    = crypto.getRandomValues(new Uint8Array(16))
-      const pinKey     = await deriveWrappingKeyFromPIN(pin, pinSalt) // Level 1b (必須)
-      const mnemonicKey = await deriveWrappingKeyFromMnemonic(phrase) // Level 2
+      const pinSalt     = crypto.getRandomValues(new Uint8Array(16))
+      const pinKey      = await deriveWrappingKeyFromPIN(pin, pinSalt) // Level 1b
+      const mnemonicKey = await deriveWrappingKeyFromMnemonic(phrase)  // Level 2
 
       // Level 1a: PRF 対応なら PRF 由来鍵、非対応 (iOS 等) なら PIN 鍵で代替
       const alphaKey = assertResult.kind === 'prf' ? assertResult.wrappingKey : pinKey
 
-      // Wrap Data Key
-      const wrappedAlpha = await wrapKey(alphaKey, dataKey)
-      const wrappedBeta  = await wrapKey(mnemonicKey, dataKey)
+      // 各レベルで Data Key を wrap（それぞれ独立した鍵で保護）
+      const wrappedAlpha = await wrapKey(alphaKey, dataKey) // Level 1a
+      const wrappedPin   = await wrapKey(pinKey, dataKey)   // Level 1b (PIN 専用)
+      const wrappedBeta  = await wrapKey(mnemonicKey, dataKey) // Level 2
 
       // Assemble bundle
       const bundle: ConfigBundle = {
@@ -168,17 +169,15 @@ export default function SecuritySetup() {
         azure: { endpoint: apiConfig.azureEndpoint, key: apiConfig.azureKey },
         gemini: { key: apiConfig.geminiKey },
         wrapped_data_key_alpha: wrappedAlpha,
+        wrapped_data_key_pin: wrappedPin,
         wrapped_data_key_beta: wrappedBeta,
         userEmail: '',
         fontSizePreference: 'standard',
       }
 
-      // Save to localStorage
+      // Save to localStorage（pinSalt を共有することで PIN unlock 時の salt が一致する）
       await saveBundleWithAlpha(alphaKey, bundle)
-      await saveBundleWithPIN(pin, bundle)
-      // LockScreen の PIN 復号で wrapped_data_key_alpha を unwrap するために alpha 用 salt を保存
-      const alphaSaltHex = Array.from(pinSalt).map((b) => b.toString(16).padStart(2, '0')).join('')
-      localStorage.setItem('config_bundle_alpha_pin_salt', alphaSaltHex)
+      await saveBundleWithPIN(pin, bundle, pinSalt)
 
       // Save wrapped keys to Supabase
       await saveVaultRow(bundle, {

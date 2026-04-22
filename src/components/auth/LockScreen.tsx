@@ -57,12 +57,11 @@ export default function LockScreen() {
     try {
       const bundle = await loadBundleWithPIN(pin)
       const { deriveWrappingKeyFromPIN, unwrapKey } = await import('@/lib/crypto')
-      // wrapped_data_key_alpha は setup 時の pinSalt(alpha 用) で wrap されている。
-      // config_bundle_pin_salt は saveBundleWithPIN が独自に生成した別の salt のため使用不可。
-      const alphaSaltHex = localStorage.getItem('config_bundle_alpha_pin_salt')!
-      const alphaSalt = Uint8Array.from(alphaSaltHex.match(/.{2}/g)!.map((h) => parseInt(h, 16)))
-      const alphaKey = await deriveWrappingKeyFromPIN(pin, alphaSalt)
-      const dataKey = await unwrapKey(alphaKey, bundle.wrapped_data_key_alpha)
+      // wrapped_data_key_pin は PIN 専用の wrap。config_bundle_pin_salt と同じ salt で導出した鍵を使用。
+      const saltHex = localStorage.getItem('config_bundle_pin_salt')!
+      const salt = Uint8Array.from(saltHex.match(/.{2}/g)!.map((h) => parseInt(h, 16)))
+      const pinKey = await deriveWrappingKeyFromPIN(pin, salt)
+      const dataKey = await unwrapKey(pinKey, bundle.wrapped_data_key_pin)
       unlock(dataKey, bundle)
     } catch {
       setError('PINが正しくありません')
