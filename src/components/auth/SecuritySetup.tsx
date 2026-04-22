@@ -135,6 +135,10 @@ export default function SecuritySetup() {
     setLoading(true)
     setError('')
     try {
+      // assertWebAuthn はユーザージェスチャー直後に呼ぶ必要がある。
+      // PBKDF2 等の重い処理を先に行うとブラウザのジェスチャータイムアウトで NotAllowedError になる。
+      const assertResult = await assertWebAuthn()
+
       // Generate mnemonic + encryption_salt (deterministic from mnemonic)
       const phrase = generateMnemonic24()
       const encSalt = await deriveEncryptionSalt(phrase)
@@ -148,7 +152,6 @@ export default function SecuritySetup() {
       const mnemonicKey = await deriveWrappingKeyFromMnemonic(phrase) // Level 2
 
       // Level 1a: PRF 対応なら PRF 由来鍵、非対応 (iOS 等) なら PIN 鍵で代替
-      const assertResult = await assertWebAuthn()
       const alphaKey = assertResult.kind === 'prf' ? assertResult.wrappingKey : pinKey
 
       // Wrap Data Key
