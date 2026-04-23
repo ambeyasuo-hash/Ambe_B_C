@@ -6,6 +6,7 @@ interface SaveRequestBody {
   encrypted_thumbnail_back: string | null
   search_hashes: string[]
   industry_category: string | null
+  card_category: string | null
   notes: string | null
   ocr_raw_text: string | null
   ocr_confidence: number
@@ -24,6 +25,7 @@ export async function POST(request: Request) {
       encrypted_thumbnail_back,
       search_hashes,
       industry_category,
+      card_category,
       notes,
       ocr_raw_text,
       ocr_confidence,
@@ -50,6 +52,7 @@ export async function POST(request: Request) {
         encrypted_thumbnail_back,
         search_hashes,
         industry_category,
+        card_category,
         notes,
         ocr_raw_text,
         ocr_confidence,
