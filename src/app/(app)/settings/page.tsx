@@ -258,7 +258,10 @@ export default function SettingsPage() {
   const { bundle, dataKey, appState, lock, updateBundle } = useVault()
   const router = useRouter()
 
-  const mnemonicConfirmed = typeof window !== 'undefined' && localStorage.getItem('mnemonic_confirmed') === '1'
+  const [mnemonicConfirmed, setMnemonicConfirmed] = useState(false)
+  useEffect(() => {
+    setMnemonicConfirmed(localStorage.getItem('mnemonic_confirmed') === '1')
+  }, [])
 
   useEffect(() => {
     if (appState !== 'UNLOCKED') router.replace('/')
@@ -587,18 +590,33 @@ export default function SettingsPage() {
 
       {/* バックアップ未確認バナー */}
       {!mnemonicConfirmed && (
-        <div className="rounded-2xl border border-amber-500/40 bg-amber-500/10 p-3">
-          <p className="text-xs font-semibold text-amber-400">⚠️ リカバリーフレーズを確認してください</p>
-          <p className="mt-0.5 text-xs text-amber-300/70">
-            未確認のままデバイスを失うと、データを復元できません。
+        <div className="rounded-2xl border border-amber-500/40 bg-amber-500/10 p-3 flex flex-col gap-2">
+          <p className="text-xs font-semibold text-amber-400">⚠️ 24単語のバックアップが未確認です</p>
+          <p className="text-xs text-amber-300/70 leading-relaxed">
+            セットアップ時に表示された24単語を紙などに保管しましたか？デバイスを失った場合の唯一の復元手段です。
           </p>
-          <button
-            onClick={() => router.push('/lock?mode=recovery')}
-            className="mt-2 rounded-xl bg-amber-500/20 px-3 py-1 text-xs text-amber-300 border border-amber-500/30
-              hover:bg-amber-500/30 transition-colors"
-          >
-            今すぐ確認する →
-          </button>
+          <p className="text-xs text-amber-300/50 leading-relaxed">
+            ※ セキュリティ上、24単語はこの画面では再表示できません。
+          </p>
+          <div className="flex gap-2 mt-1">
+            <button
+              onClick={() => {
+                localStorage.setItem('mnemonic_confirmed', '1')
+                setMnemonicConfirmed(true)
+              }}
+              className="flex-1 rounded-xl bg-amber-500/20 px-3 py-1.5 text-xs text-amber-300 border border-amber-500/30
+                hover:bg-amber-500/30 transition-colors"
+            >
+              ✓ 保管済みにする
+            </button>
+            <button
+              onClick={() => router.push('/lock?mode=mnemonic')}
+              className="flex-1 rounded-xl bg-white/5 px-3 py-1.5 text-xs text-muted-foreground border border-white/10
+                hover:bg-white/10 transition-colors"
+            >
+              24単語でリカバリー →
+            </button>
+          </div>
         </div>
       )}
 
@@ -1022,6 +1040,22 @@ export default function SettingsPage() {
               </div>
             )}
             {copyMsg && <p className="text-xs text-emerald-400">{copyMsg}</p>}
+          </div>
+
+          {/* 24単語リカバリー入力 */}
+          <div className="flex flex-col gap-2 border-t border-amber-500/20 pt-3">
+            <p className="text-xs text-amber-400 font-medium">24単語でリカバリー（完全全滅時）</p>
+            <p className="text-xs text-muted-foreground leading-relaxed">
+              デバイスと .ambe ファイルを両方失った場合、24単語と Supabase 接続情報があればデータを復元できます。
+            </p>
+            <motion.button
+              whileTap={{ scale: 0.97 }}
+              onClick={() => router.push('/lock?mode=mnemonic')}
+              className="w-full py-2 rounded-xl border border-amber-500/30 text-amber-400 text-xs
+                hover:bg-amber-500/10 transition-colors"
+            >
+              🔑 24単語リカバリーを開始する →
+            </motion.button>
           </div>
 
           <div className="flex flex-col gap-2 border-t border-amber-500/20 pt-3">

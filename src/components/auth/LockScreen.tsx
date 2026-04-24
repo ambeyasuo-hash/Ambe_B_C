@@ -21,9 +21,9 @@ import QRPairingImport from '@/components/QRPairingImport'
 
 type LockMode = 'biometric' | 'pin' | 'reset' | 'ambe' | 'mnemonic' | 'qr-import'
 
-export default function LockScreen() {
+export default function LockScreen({ initialMode }: { initialMode?: LockMode }) {
   const { unlock } = useVault()
-  const [mode, setMode] = useState<LockMode>('biometric')
+  const [mode, setMode] = useState<LockMode>(initialMode ?? 'biometric')
   const [pin, setPin] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
