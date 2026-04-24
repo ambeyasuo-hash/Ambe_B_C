@@ -16,6 +16,59 @@ import { fetchCategories, createCategory, type Category } from '@/lib/categories
 type ScanStep = 'camera' | 'preview'
 type CardSide = 'front' | 'back'
 
+// ── 氏名フィールドの問題検出（クライアントサイドのみ） ────────────────────
+const NAME_DEPT_SUFFIX_RE =
+  /(?:部|課|係|室|グループ|チーム|部門|センター|事業部|本部|局)(?:長|次長|主任|担当|代理|補佐|マネージャー|リーダー|スタッフ)?/
+const NAME_DEPT_START_RE =
+  /^(?:第.{1,3})?(?:営業|開発|技術|総務|人事|経理|財務|広報|企画|管理|システム|品質|製造|購買|物流|法務|経営|事業|商品|マーケ|デザイン|サポート)/
+const NAME_JP_RE =
+  /^[\u4e00-\u9faf\u3040-\u309f\u30a0-\u30ff]{1,4}[\s\u3000]{0,2}[\u4e00-\u9faf\u3040-\u309f\u30a0-\u30ff]{1,4}$/
+
+interface NameIssue {
+  tooLong: boolean
+  hasDept: boolean
+  /** 分割候補: { deptPart, namePart } */
+  split?: { deptPart: string; namePart: string }
+}
+
+function detectNameIssue(name: string): NameIssue | null {
+  if (!name) return null
+  const tooLong = name.length > 10
+  const hasDeptSuffix = NAME_DEPT_SUFFIX_RE.test(name)
+  const hasDeptStart  = NAME_DEPT_START_RE.test(name)
+  const hasDept = hasDeptSuffix || hasDeptStart
+
+  if (!tooLong && !hasDept) return null
+
+  // スペース区切り分割を試みる
+  const spaceIdx = name.search(/[\s\u3000]+/)
+  if (spaceIdx > 0) {
+    const left  = name.slice(0, spaceIdx).trim()
+    const right = name.slice(spaceIdx).trim()
+    const leftIsOrg  = NAME_DEPT_SUFFIX_RE.test(left)  || NAME_DEPT_START_RE.test(left)
+    const rightIsOrg = NAME_DEPT_SUFFIX_RE.test(right) || NAME_DEPT_START_RE.test(right)
+    const rightIsName = NAME_JP_RE.test(right)
+    const leftIsName  = NAME_JP_RE.test(left)
+
+    if (leftIsOrg && rightIsName) {
+      return { tooLong, hasDept, split: { deptPart: left, namePart: right } }
+    }
+    if (leftIsName && rightIsOrg) {
+      return { tooLong, hasDept, split: { deptPart: right, namePart: left } }
+    }
+  }
+
+  // スペースなし境界検出
+  const m = name.match(
+    /^(.{1,10}(?:部|課|係|室|グループ|チーム|部門|センター|事業部|本部|局)(?:長|次長|主任|担当|代理|補佐|マネージャー|リーダー)?)([\u4e00-\u9faf\u3040-\u309f\u30a0-\u30ff]{2,8})$/
+  )
+  if (m) {
+    return { tooLong, hasDept, split: { deptPart: m[1], namePart: m[2] } }
+  }
+
+  return { tooLong, hasDept }
+}
+
 interface EditFields {
   name: string
   company: string
@@ -581,20 +634,55 @@ export default function ScanPage() {
 
         {/* Editable form */}
         <div className="rounded-2xl bg-card border border-white/10 p-4 flex flex-col gap-4">
-          {FORM_FIELDS.map(({ key, label, type }) => (
-            <div key={key}>
-              <label className="text-xs text-muted-foreground">{label}</label>
-              <input
-                type={type}
-                value={editFields[key]}
-                onChange={(e) => setEditFields((prev) => ({ ...prev, [key]: e.target.value }))}
-                className="mt-1 w-full rounded-xl bg-background border border-white/10 px-3 py-2
-                  text-sm text-foreground placeholder:text-muted-foreground
-                  focus:outline-none focus:ring-1 focus:ring-blue-500"
-                placeholder={label}
-              />
-            </div>
-          ))}
+          {FORM_FIELDS.map(({ key, label, type }) => {
+            const nameIssue = key === 'name' ? detectNameIssue(editFields.name) : null
+            return (
+              <div key={key}>
+                <label className="text-xs text-muted-foreground">{label}</label>
+                <input
+                  type={type}
+                  value={editFields[key]}
+                  onChange={(e) => setEditFields((prev) => ({ ...prev, [key]: e.target.value }))}
+                  className={`mt-1 w-full rounded-xl bg-background border px-3 py-2
+                    text-sm text-foreground placeholder:text-muted-foreground
+                    focus:outline-none focus:ring-1 focus:ring-blue-500
+                    ${nameIssue ? 'border-amber-500/60' : 'border-white/10'}`}
+                  placeholder={label}
+                />
+                {/* ── 氏名フィールド警告バナー ── */}
+                {nameIssue && (
+                  <div className="mt-1.5 rounded-xl bg-amber-500/10 border border-amber-500/30 px-3 py-2 flex flex-col gap-1.5">
+                    <p className="text-xs text-amber-400 leading-snug">
+                      {nameIssue.hasDept
+                        ? '所属名が氏名欄に混入している可能性があります'
+                        : '氏名が長すぎます。確認してください'}
+                    </p>
+                    {nameIssue.split && (
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-xs text-muted-foreground">分割候補:</span>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setEditFields((prev) => ({
+                              ...prev,
+                              name:  nameIssue.split!.namePart,
+                              title: prev.title
+                                ? prev.title
+                                : nameIssue.split!.deptPart,
+                            }))
+                          }
+                          className="text-xs px-2 py-0.5 rounded-lg bg-amber-500/20 border border-amber-500/40
+                            text-amber-300 font-medium"
+                        >
+                          氏名 →「{nameIssue.split.namePart}」/ 役職 →「{nameIssue.split.deptPart}」
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )
+          })}
           <div>
             <label className="text-xs text-muted-foreground">メモ</label>
             <textarea

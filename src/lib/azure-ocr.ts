@@ -107,6 +107,90 @@ const JP_NAME_RE = /^[\u4e00-\u9faf\u3040-\u309f\u30a0-\u30ff]{1,4}[\s\u3000]{0,
 // アルファベット名（First Last 形式）
 const EN_NAME_RE = /^[A-Z][a-z]+([\s][A-Z][a-z]+){1,3}$/
 
+// ── 組織単位サフィックス（部署名・役職名の末尾パターン） ─────────────────
+// 「〇〇課」「〇〇部長」「営業チーム」など人名フィールドへの混入パターンを検出する
+const ORG_UNIT_SUFFIX_RE =
+  /(?:部|課|係|室|グループ|チーム|部門|センター|事業部|本部|局|所|科|団|会|ユニット)(?:長|次長|主任|担当|代理|補佐|マネージャー|リーダー|スタッフ)?$/
+// 組織単位プレフィックス（「営業」「開発」「第一」など部署名が先頭に来るパターン）
+const ORG_UNIT_START_RE =
+  /^(?:第.{1,3})?(?:営業|開発|技術|総務|人事|経理|財務|広報|企画|管理|システム|品質|製造|購買|物流|法務|経営|事業|商品|マーケ|デザイン|サポート|カスタマー)/
+
+/**
+ * Azure の ContactNames フィールド（または fallback の name 候補）が
+ * 所属名・役職名を含んでいる場合にクレンジングする。
+ *
+ * 例:
+ *   "営業課 田中太郎"   → name="田中太郎"  title="営業課"
+ *   "田中太郎 総務部"   → name="田中太郎"  title="総務部"
+ *   "営業課田中太郎"    → name="田中太郎"  title="営業課" (スペースなし結合)
+ *   "営業第一課"        → name=undefined   title="営業第一課"
+ */
+export function cleanNameField(
+  nameField: OcrField | undefined,
+  existingTitle: OcrField | undefined,
+): { name?: OcrField; title?: OcrField } {
+  if (!nameField) return {}
+  const val = nameField.value.trim()
+
+  // ① スペース区切りで分割して左右を判定
+  const spaceIdx = val.search(/[\s\u3000]+/)
+  if (spaceIdx > 0) {
+    const left  = val.slice(0, spaceIdx).trim()
+    const right = val.slice(spaceIdx).trim()
+
+    const leftIsOrg  = ORG_UNIT_SUFFIX_RE.test(left)  || ORG_UNIT_START_RE.test(left)  || TITLE_KEYWORDS.some((k) => left.includes(k))
+    const rightIsOrg = ORG_UNIT_SUFFIX_RE.test(right) || ORG_UNIT_START_RE.test(right) || TITLE_KEYWORDS.some((k) => right.includes(k))
+    const leftIsName  = JP_NAME_RE.test(left)  || EN_NAME_RE.test(left)
+    const rightIsName = JP_NAME_RE.test(right) || EN_NAME_RE.test(right)
+
+    if (leftIsOrg && rightIsName) {
+      return {
+        name:  { value: right, confidence: nameField.confidence * 0.9 },
+        title: existingTitle ?? { value: left, confidence: nameField.confidence * 0.8 },
+      }
+    }
+    if (leftIsName && rightIsOrg) {
+      return {
+        name:  { value: left,  confidence: nameField.confidence * 0.9 },
+        title: existingTitle ?? { value: right, confidence: nameField.confidence * 0.8 },
+      }
+    }
+  }
+
+  // ② スペースなし結合パターン: "営業課田中太郎" のような形を境界で分割
+  //    組織単位サフィックスの直後で CJK 2〜4 文字×2 ブロックが続く場合
+  const boundaryMatch = val.match(
+    /^(.{1,10}(?:部|課|係|室|グループ|チーム|部門|センター|事業部|本部|局)(?:長|次長|主任|担当|代理|補佐|マネージャー|リーダー)?)([\u4e00-\u9faf\u3040-\u309f\u30a0-\u30ff]{2,8})$/
+  )
+  if (boundaryMatch) {
+    const orgPart  = boundaryMatch[1]
+    const namePart = boundaryMatch[2]
+    if (JP_NAME_RE.test(namePart)) {
+      return {
+        name:  { value: namePart, confidence: nameField.confidence * 0.85 },
+        title: existingTitle ?? { value: orgPart,  confidence: nameField.confidence * 0.75 },
+      }
+    }
+  }
+
+  // ③ 全体が組織単位（人名が取り出せない）→ title に昇格して name は空
+  if (
+    ORG_UNIT_SUFFIX_RE.test(val) ||
+    (ORG_UNIT_START_RE.test(val) && !JP_NAME_RE.test(val) && !EN_NAME_RE.test(val))
+  ) {
+    return {
+      title: existingTitle ?? { value: val, confidence: nameField.confidence * 0.7 },
+    }
+  }
+
+  // ④ 異常に長い場合（10 文字超）かつ名前パターンに合致しない → 信頼度を下げて返す
+  if (val.length > 10 && !JP_NAME_RE.test(val) && !EN_NAME_RE.test(val)) {
+    return { name: { value: val, confidence: nameField.confidence * 0.5 } }
+  }
+
+  return { name: nameField }
+}
+
 function parseRawTextFallback(rawText: string): Partial<BusinessCardOcrResult> {
   const lines = rawText.split('\n').map((l) => l.trim()).filter((l) => l.length > 0)
   const used = new Set<number>()
@@ -236,6 +320,8 @@ function parseRawTextFallback(rawText: string): Partial<BusinessCardOcrResult> {
     for (let i = 0; i < lines.length; i++) {
       if (used.has(i)) continue
       const l = lines[i]
+      // 組織単位を含む行は名前候補から除外
+      if (ORG_UNIT_SUFFIX_RE.test(l) || ORG_UNIT_START_RE.test(l)) continue
       if (JP_NAME_RE.test(l) || EN_NAME_RE.test(l)) {
         result.name = { value: l, confidence: 0.82 }
         used.add(i)
@@ -244,7 +330,7 @@ function parseRawTextFallback(rawText: string): Partial<BusinessCardOcrResult> {
     }
   }
   if (!result.name) {
-    // パターン不一致の場合は「短くて連絡先でも会社名でもない行」から推定
+    // パターン不一致の場合は「短くて連絡先でも会社名でも組織単位でもない行」から推定
     const remaining = lines.filter((l, i) => {
       if (used.has(i)) return false
       if (l.length > 20) return false
@@ -252,11 +338,22 @@ function parseRawTextFallback(rawText: string): Partial<BusinessCardOcrResult> {
       if (/\d{4,}/.test(l)) return false
       if (COMPANY_KEYWORDS.some((k) => l.includes(k))) return false
       if (TITLE_KEYWORDS.some((k) => l.includes(k))) return false
+      // 組織単位サフィックスを含む行を除外（「〇〇課」「〇〇部」など）
+      if (ORG_UNIT_SUFFIX_RE.test(l)) return false
+      if (ORG_UNIT_START_RE.test(l)) return false
       return true
     })
     if (remaining.length > 0) {
       const nameLine = remaining.reduce((a, b) => (a.length <= b.length ? a : b))
       result.name = { value: nameLine, confidence: 0.55 }
+    }
+  }
+  // ── fallback で得た name にもクレンジングを適用 ──────────────────────
+  if (result.name) {
+    const cleaned = cleanNameField(result.name, result.title)
+    if (cleaned.name !== result.name || cleaned.title) {
+      result.name  = cleaned.name
+      if (!result.title && cleaned.title) result.title = cleaned.title
     }
   }
 
@@ -344,10 +441,19 @@ export async function analyzeBusinessCardFront(
   const fields = docs?.[0]?.fields as Record<string, unknown> | undefined
 
   const rawText = extractRawText(analyzeResult)
+  const rawTitle   = extractField(fields, 'JobTitles', 'Title', 'JobTitle')
+  const rawName    = extractField(fields, 'ContactNames', 'Name', 'FirstName')
+
+  // ── ContactNames クレンジング ─────────────────────────────────────────
+  // Azure の prebuilt-businessCard は日本語名刺で「営業課 田中太郎」のような
+  // 所属＋氏名を ContactNames に丸ごと入れてしまうことがある。
+  // cleanNameField() でクライアントサイドのみで分離する（PII 外部送信なし）。
+  const { name: cleanedName, title: inferredTitle } = cleanNameField(rawName, rawTitle)
+
   const structured = {
-    name:    extractField(fields, 'ContactNames', 'Name', 'FirstName'),
+    name:    cleanedName,
     company: extractField(fields, 'CompanyNames', 'Organizations', 'Company', 'CompanyName'),
-    title:   extractField(fields, 'JobTitles', 'Title', 'JobTitle'),
+    title:   rawTitle ?? inferredTitle,
     email:   extractField(fields, 'Emails', 'Email', 'EmailAddress'),
     tel:     extractField(fields, 'PhoneNumbers', 'Phone', 'Tel', 'MobilePhone'),
     address: extractField(fields, 'Addresses', 'Address'),
