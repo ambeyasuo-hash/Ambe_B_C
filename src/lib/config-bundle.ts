@@ -15,6 +15,8 @@ export interface ConfigBundle {
   wrapped_data_key_alpha: string   // WebAuthn PRF 由来鍵で wrap
   wrapped_data_key_pin: string     // PIN 由来鍵で wrap (Level 1b)
   wrapped_data_key_beta: string    // Mnemonic 由来鍵で wrap (Level 2)
+  /** PIN wrapping salt (hex). .ambe インポート時に pin_salt が分かるようバンドル内に保持 */
+  pin_salt?: string
   userEmail: string
   fontSizePreference: 'small' | 'standard' | 'large' | 'xlarge'
 }
@@ -52,9 +54,11 @@ export async function saveBundleWithPIN(
   existingSalt?: Uint8Array<ArrayBuffer>,
 ): Promise<void> {
   const salt = existingSalt ?? randomBytes(16)
-  const wrappingKey = await deriveWrappingKeyFromPIN(pin, salt)
-  const wrapped = await aesEncryptString(wrappingKey, serialize(bundle))
   const saltHex = Array.from(salt).map((b) => b.toString(16).padStart(2, '0')).join('')
+  const wrappingKey = await deriveWrappingKeyFromPIN(pin, salt)
+  // pin_salt をバンドル内に埋め込む（.ambe インポート時に再利用可能にする）
+  const bundleWithSalt: ConfigBundle = { ...bundle, pin_salt: saltHex }
+  const wrapped = await aesEncryptString(wrappingKey, serialize(bundleWithSalt))
   localStorage.setItem(LS_WRAPPED_PIN, wrapped)
   localStorage.setItem(LS_PIN_SALT, saltHex)
 }

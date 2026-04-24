@@ -123,7 +123,8 @@ export default function SettingsPage() {
     setPinChangeMsg('')
     try {
       const currentBundle = await loadBundleWithPIN(currentPin)
-      const saltHex = localStorage.getItem('config_bundle_pin_salt')!
+      // pin_salt は bundle 内に保持（旧環境は localStorage にフォールバック）
+      const saltHex = currentBundle.pin_salt ?? localStorage.getItem('config_bundle_pin_salt')!
       const salt = Uint8Array.from(saltHex.match(/.{2}/g)!.map((h: string) => parseInt(h, 16))) as unknown as Uint8Array<ArrayBuffer>
       const currentPinKey = await deriveWrappingKeyFromPIN(currentPin, salt)
       const dataKeyFromPin = await unwrapKey(currentPinKey, currentBundle.wrapped_data_key_pin)
@@ -135,6 +136,7 @@ export default function SettingsPage() {
       const updatedBundle: ConfigBundle = {
         ...currentBundle,
         wrapped_data_key_pin: newWrappedDataKey,
+        // pin_salt は saveBundleWithPIN が newSalt を使って自動更新する
       }
 
       await saveBundleWithPIN(newPin, updatedBundle, newSalt)

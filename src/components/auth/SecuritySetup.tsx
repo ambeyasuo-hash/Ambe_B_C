@@ -146,6 +146,7 @@ export default function SecuritySetup() {
 
       // Derive wrapping keys
       const pinSalt     = crypto.getRandomValues(new Uint8Array(16))
+      const pinSaltHex  = Array.from(pinSalt).map((b) => b.toString(16).padStart(2, '0')).join('')
       const pinKey      = await deriveWrappingKeyFromPIN(pin, pinSalt) // Level 1b
       const mnemonicKey = await deriveWrappingKeyFromMnemonic(phrase)  // Level 2
 
@@ -157,7 +158,7 @@ export default function SecuritySetup() {
       const wrappedPin   = await wrapKey(pinKey, dataKey)   // Level 1b (PIN 専用)
       const wrappedBeta  = await wrapKey(mnemonicKey, dataKey) // Level 2
 
-      // Assemble bundle
+      // Assemble bundle (pin_salt を内包して .ambe リカバリを可能にする)
       const bundle: ConfigBundle = {
         v: 1,
         encryption_salt: encSalt,
@@ -169,6 +170,7 @@ export default function SecuritySetup() {
         wrapped_data_key_alpha: wrappedAlpha,
         wrapped_data_key_pin: wrappedPin,
         wrapped_data_key_beta: wrappedBeta,
+        pin_salt: pinSaltHex,
         userEmail: '',
         fontSizePreference: 'standard',
       }
