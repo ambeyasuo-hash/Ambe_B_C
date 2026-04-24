@@ -73,7 +73,7 @@ export async function assertWebAuthn(): Promise<AssertResult> {
   const assertion = await navigator.credentials.get({
     publicKey: {
       challenge,
-      allowCredentials: [{ id: fromB64(credentialIdB64), type: 'public-key', transports: ['internal'] }],
+      allowCredentials: [{ id: fromB64(credentialIdB64), type: 'public-key' }],
       userVerification: 'required',
       timeout: 60_000,
       ...(getRpId() ? { rpId: getRpId() } : {}),
