@@ -1,17 +1,18 @@
-interface OcrRequestBody {
+// POST /api/ocr
+// Azure AI Document Intelligence にジョブを提出し、operationUrl を即座に返す。
+// ポーリングはクライアント側が /api/ocr/poll を叩いて行う。
+// Vercel 関数の実行時間: < 5 秒（タイムアウト問題を根本解決）
+
+interface OcrSubmitBody {
   image: string
   model: 'prebuilt-businessCard' | 'prebuilt-layout' | 'prebuilt-read'
   azureEndpoint: string
   azureKey: string
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
-}
-
 export async function POST(request: Request) {
   try {
-    const body = (await request.json()) as OcrRequestBody
+    const body = (await request.json()) as OcrSubmitBody
     const { image, model, azureEndpoint, azureKey } = body
 
     if (!image || !model || !azureEndpoint || !azureKey) {
@@ -56,30 +57,10 @@ export async function POST(request: Request) {
       return Response.json({ error: 'Azure から操作 URL が返されませんでした' }, { status: 500 })
     }
 
-    // Poll up to 10 times with 3-second intervals
-    for (let i = 0; i < 10; i++) {
-      await sleep(3000)
-      const pollRes = await fetch(operationUrl, {
-        headers: { 'Ocp-Apim-Subscription-Key': azureKey },
-      })
-      if (!pollRes.ok) {
-        return Response.json({ error: 'OCR 結果の取得に失敗しました' }, { status: 500 })
-      }
-      const result = (await pollRes.json()) as { status: string }
-      if (result.status === 'succeeded') {
-        return Response.json(result)
-      }
-      if (result.status === 'failed') {
-        return Response.json({ error: 'Azure OCR 解析が失敗しました' }, { status: 500 })
-      }
-    }
-
-    return Response.json(
-      { error: 'OCR タイムアウト: 解析に時間がかかりすぎています' },
-      { status: 504 },
-    )
+    // operationUrl と azureKey を返す（ポーリングはクライアント側で行う）
+    return Response.json({ operationUrl, azureKey })
   } catch (e) {
     const msg = e instanceof Error ? e.message : '不明なエラー'
-    return Response.json({ error: `OCR エラー: ${msg}` }, { status: 500 })
+    return Response.json({ error: `OCR 提出エラー: ${msg}` }, { status: 500 })
   }
 }

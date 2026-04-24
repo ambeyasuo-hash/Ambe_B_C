@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { motion, AnimatePresence } from 'framer-motion'
-import { createClient } from '@supabase/supabase-js'
+import { getSupabaseClient } from '@/lib/supabase'
 import { useVault } from '@/context/VaultContext'
 import { aesDecryptString, hkdfDerive, hmacIndex } from '@/lib/crypto'
 import { fetchCategories, createCategory, type Category } from '@/lib/categories'
@@ -96,7 +96,7 @@ export default function CardsPage() {
     setIsLoading(true)
     setError(null)
     try {
-      const supabase = createClient(bundle.supabase.url, bundle.supabase.anon_key)
+      const supabase = getSupabaseClient(bundle.supabase.url, bundle.supabase.anon_key)
 
       let query = supabase
         .from('business_cards')

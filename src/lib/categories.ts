@@ -1,6 +1,6 @@
 'use client'
 
-import { createClient } from '@supabase/supabase-js'
+import { getSupabaseClient } from './supabase'
 
 export interface Category {
   id: string
@@ -21,7 +21,7 @@ export async function fetchCategories(
   supabaseAnonKey: string,
   encryptionSalt: string,
 ): Promise<Category[]> {
-  const supabase = createClient(supabaseUrl, supabaseAnonKey)
+  const supabase = getSupabaseClient(supabaseUrl, supabaseAnonKey)
   const { data, error } = await supabase
     .from('categories')
     .select('id, name, color_index, sort_order')
@@ -42,7 +42,7 @@ export async function createCategory(
   name: string,
   colorIndex: number,
 ): Promise<Category> {
-  const supabase = createClient(supabaseUrl, supabaseAnonKey)
+  const supabase = getSupabaseClient(supabaseUrl, supabaseAnonKey)
   const { data, error } = await supabase
     .from('categories')
     .insert({ encryption_salt: encryptionSalt, name, color_index: colorIndex, sort_order: 999 })
@@ -59,7 +59,7 @@ export async function deleteCategory(
   id: string,
 ): Promise<void> {
   if (id === 'system-default') return
-  const supabase = createClient(supabaseUrl, supabaseAnonKey)
+  const supabase = getSupabaseClient(supabaseUrl, supabaseAnonKey)
   const { error } = await supabase.from('categories').delete().eq('id', id)
   if (error) throw new Error(`カテゴリ削除エラー: ${error.message}`)
 }

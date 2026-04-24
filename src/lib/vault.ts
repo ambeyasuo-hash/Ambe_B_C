@@ -1,13 +1,13 @@
 'use client'
 
-import { createClient } from '@supabase/supabase-js'
 import { generateDataKey, wrapKey, unwrapKey } from './crypto'
+import { getSupabaseClient } from './supabase'
 import type { ConfigBundle } from './config-bundle'
 
 // ── Supabase client factory (uses runtime config from ConfigBundle) ─────────
 
 export function makeSupabaseClient(url: string, anonKey: string) {
-  return createClient(url, anonKey)
+  return getSupabaseClient(url, anonKey)
 }
 
 // ── user_vault row ─────────────────────────────────────────────────────────

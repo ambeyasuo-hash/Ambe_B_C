@@ -71,21 +71,63 @@ function extractRawText(analyzeResult: Record<string, unknown>): string {
   )
 }
 
+// ── Client-side polling (submit → poll loop) ──────────────────────────────
+
+const POLL_INTERVAL_MS = 2000
+const POLL_MAX_ATTEMPTS = 30 // 最大 60 秒待機
+
+async function submitOcr(
+  imageBase64: string,
+  model: 'prebuilt-businessCard' | 'prebuilt-layout' | 'prebuilt-read',
+  azureEndpoint: string,
+  azureKey: string,
+): Promise<{ operationUrl: string; azureKey: string }> {
+  const res = await fetch('/api/ocr', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ image: imageBase64, model, azureEndpoint, azureKey }),
+  })
+  if (!res.ok) {
+    const err = (await res.json().catch(() => ({}))) as { error?: string }
+    throw new Error(err.error ?? 'OCR の送信に失敗しました')
+  }
+  return res.json() as Promise<{ operationUrl: string; azureKey: string }>
+}
+
+async function pollUntilDone(
+  operationUrl: string,
+  azureKey: string,
+): Promise<Record<string, unknown>> {
+  for (let i = 0; i < POLL_MAX_ATTEMPTS; i++) {
+    await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS))
+    const res = await fetch('/api/ocr/poll', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ operationUrl, azureKey }),
+    })
+    if (!res.ok) {
+      const err = (await res.json().catch(() => ({}))) as { error?: string }
+      throw new Error(err.error ?? 'OCR 状態の取得に失敗しました')
+    }
+    const result = (await res.json()) as Record<string, unknown>
+    if (result.status === 'succeeded') return result
+    if (result.status === 'failed') throw new Error('Azure OCR 解析が失敗しました')
+    // status === 'running' の場合はループを続ける
+  }
+  throw new Error('OCR タイムアウト: 解析に時間がかかりすぎています')
+}
+
+// ── Public API ────────────────────────────────────────────────────────────
+
 export async function analyzeBusinessCardFront(
   imageBase64: string,
   azureEndpoint: string,
   azureKey: string,
 ): Promise<BusinessCardOcrResult> {
-  const res = await fetch('/api/ocr', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ image: imageBase64, model: 'prebuilt-businessCard', azureEndpoint, azureKey }),
-  })
-  if (!res.ok) {
-    const err = (await res.json().catch(() => ({}))) as { error?: string }
-    throw new Error(err.error ?? 'OCR 解析に失敗しました（表面）')
-  }
-  const data = (await res.json()) as Record<string, unknown>
+  const { operationUrl, azureKey: key } = await submitOcr(
+    imageBase64, 'prebuilt-businessCard', azureEndpoint, azureKey,
+  )
+  const data = await pollUntilDone(operationUrl, key)
   const analyzeResult = (data.analyzeResult ?? data) as Record<string, unknown>
   const docs = analyzeResult.documents as Array<Record<string, unknown>> | undefined
   const fields = docs?.[0]?.fields as Record<string, unknown> | undefined
@@ -107,16 +149,10 @@ export async function analyzeBusinessCardBack(
   azureEndpoint: string,
   azureKey: string,
 ): Promise<{ rawText: string; confidence: number }> {
-  const res = await fetch('/api/ocr', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ image: imageBase64, model: 'prebuilt-read', azureEndpoint, azureKey }),
-  })
-  if (!res.ok) {
-    const err = (await res.json().catch(() => ({}))) as { error?: string }
-    throw new Error(err.error ?? 'OCR 解析に失敗しました（裏面）')
-  }
-  const data = (await res.json()) as Record<string, unknown>
+  const { operationUrl, azureKey: key } = await submitOcr(
+    imageBase64, 'prebuilt-read', azureEndpoint, azureKey,
+  )
+  const data = await pollUntilDone(operationUrl, key)
   const analyzeResult = (data.analyzeResult ?? data) as Record<string, unknown>
   return {
     rawText: extractRawText(analyzeResult),

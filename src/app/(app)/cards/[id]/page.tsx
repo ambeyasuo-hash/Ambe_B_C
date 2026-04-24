@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { motion, AnimatePresence } from 'framer-motion'
-import { createClient } from '@supabase/supabase-js'
+import { getSupabaseClient } from '@/lib/supabase'
 import { useVault } from '@/context/VaultContext'
 import { aesDecryptString, aesEncryptString, hkdfDerive, hmacIndex } from '@/lib/crypto'
 
@@ -104,7 +104,7 @@ export default function CardDetailPage() {
     setIsLoading(true)
     setError(null)
     try {
-      const supabase = createClient(bundle.supabase.url, bundle.supabase.anon_key)
+      const supabase = getSupabaseClient(bundle.supabase.url, bundle.supabase.anon_key)
       const { data, error: fetchError } = await supabase
         .from('business_cards')
         .select('id, encrypted_data, encrypted_thumbnail_front, encrypted_thumbnail_back, card_category, thank_you_sent, thank_you_sent_at, scanned_at, industry_category, notes')
@@ -185,7 +185,7 @@ export default function CardDetailPage() {
       const uniqueTokens = [...new Set(rawTokens)]
       const searchHashes = await Promise.all(uniqueTokens.map((t) => hmacIndex(hmacKeyBytes, t)))
 
-      const supabase = createClient(bundle.supabase.url, bundle.supabase.anon_key)
+      const supabase = getSupabaseClient(bundle.supabase.url, bundle.supabase.anon_key)
       const { error: updateError } = await supabase
         .from('business_cards')
         .update({
@@ -215,7 +215,7 @@ export default function CardDetailPage() {
     if (!bundle) return
     setIsDeleting(true)
     try {
-      const supabase = createClient(bundle.supabase.url, bundle.supabase.anon_key)
+      const supabase = getSupabaseClient(bundle.supabase.url, bundle.supabase.anon_key)
       const { error: deleteError } = await supabase.from('business_cards').delete().eq('id', id)
       if (deleteError) throw new Error(deleteError.message)
       router.push('/cards')
@@ -261,7 +261,7 @@ export default function CardDetailPage() {
     if (!bundle || !card) return
     setIsSendingThankYou(true)
     try {
-      const supabase = createClient(bundle.supabase.url, bundle.supabase.anon_key)
+      const supabase = getSupabaseClient(bundle.supabase.url, bundle.supabase.anon_key)
       const { error: updateError } = await supabase
         .from('business_cards')
         .update({ thank_you_sent: true, thank_you_sent_at: new Date().toISOString() })
