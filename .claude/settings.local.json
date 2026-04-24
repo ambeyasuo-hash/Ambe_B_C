@@ -20,7 +20,14 @@
       "Bash(git commit *)",
       "Bash(git push *)",
       "Bash(git remote *)",
-      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(json.dumps\\(d.get\\('exports',{}\\), indent=2\\)\\)\")"
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(json.dumps\\(d.get\\('exports',{}\\), indent=2\\)\\)\")",
+      "Bash(npx tsc *)",
+      "Bash(xargs -I{} sh -c 'echo \"=== {} ===\" && cat \"{}\"')",
+      "Bash(pnpm build *)",
+      "Bash(npx next *)",
+      "Bash(node -e \"const z = require\\('@zxing/browser'\\); const r = new z.BrowserQRCodeReader\\(\\); console.log\\(Object.getOwnPropertyNames\\(Object.getPrototypeOf\\(r\\)\\).join\\('\\\\n'\\)\\)\")",
+      "Bash(node -e \"const z = require\\('@zxing/browser'\\); console.log\\(Object.keys\\(z\\)\\)\")",
+      "Bash(node -e \"const z = require\\('@zxing/browser'\\); const r = new z.BrowserQRCodeReader\\(\\); const proto = Object.getPrototypeOf\\(r\\); let p = proto; while\\(p && p !== Object.prototype\\) { console.log\\(Object.getOwnPropertyNames\\(p\\).join\\(', '\\)\\); p = Object.getPrototypeOf\\(p\\); }\")"
     ]
   }
 }

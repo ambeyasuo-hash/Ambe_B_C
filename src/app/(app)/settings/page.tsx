@@ -16,6 +16,7 @@ import { registerWebAuthn, hasRegisteredCredential, isPrfEnabled } from '@/lib/w
 import { testSupabaseConnection } from '@/lib/vault'
 import { useRouter } from 'next/navigation'
 import QRPairingExport from '@/components/QRPairingExport'
+import { PinConfirmModal } from '@/components/PinConfirmModal'
 
 type TestState = 'idle' | 'testing' | 'ok' | 'error'
 
@@ -103,9 +104,20 @@ export default function SettingsPage() {
   const { bundle, dataKey, appState, lock } = useVault()
   const router = useRouter()
 
+  // C-3: Backup confirmation banner
+  const mnemonicConfirmed = typeof window !== 'undefined' && localStorage.getItem('mnemonic_confirmed') === '1'
+
   useEffect(() => {
     if (appState !== 'UNLOCKED') router.replace('/')
   }, [appState, router])
+
+  // ── PIN Confirmation Modal ─────────────────────────────────────────────────
+
+  const [pinModal, setPinModal] = useState<{
+    show: boolean
+    title: string
+    onConfirm: (pin: string) => void
+  } | null>(null)
 
   // ── QR Pairing Export ─────────────────────────────────────────────────────
 
@@ -216,43 +228,49 @@ export default function SettingsPage() {
     if (!bundle) return
     setApiSaving(true)
     setApiSaveMsg('')
-    try {
-      const pinSaltHex = localStorage.getItem('config_bundle_pin_salt')
-      if (!pinSaltHex) throw new Error('PINが見つかりません')
-      const pin = window.prompt('API設定を保存するためPINを入力してください')
-      if (!pin) { setApiSaving(false); return }
-
-      const currentBundle = await loadBundleWithPIN(pin)
-      const updatedBundle: ConfigBundle = {
-        ...currentBundle,
-        supabase: { url: apiFields.supabaseUrl, anon_key: apiFields.supabaseKey },
-        azure: { endpoint: apiFields.azureEndpoint, key: apiFields.azureKey },
-        gemini: { key: apiFields.geminiKey },
-      }
-
-      const salt = Uint8Array.from(pinSaltHex.match(/.{2}/g)!.map((h: string) => parseInt(h, 16))) as unknown as Uint8Array<ArrayBuffer>
-      await saveBundleWithPIN(pin, updatedBundle, salt)
-
-      const alphaWrapped = localStorage.getItem('config_bundle_wrapped_alpha')
-      if (alphaWrapped && dataKey) {
-        const { assertWebAuthn } = await import('@/lib/webauthn')
+    setPinModal({
+      show: true,
+      title: 'API設定を保存するためPINを入力してください',
+      onConfirm: async (pin: string) => {
         try {
-          const result = await assertWebAuthn()
-          if (result.kind === 'prf') {
-            await saveBundleWithAlpha(result.wrappingKey, updatedBundle)
-          }
-        } catch {
-          // alpha update optional
-        }
-      }
+          if (!pin) return
+          const pinSaltHex = localStorage.getItem('config_bundle_pin_salt')
+          if (!pinSaltHex) throw new Error('PINが見つかりません')
 
-      setApiSaveMsg('保存しました')
-      setTimeout(() => setApiSaveMsg(''), 3000)
-    } catch (e) {
-      setApiSaveMsg(e instanceof Error ? e.message : '保存に失敗しました')
-    } finally {
-      setApiSaving(false)
-    }
+          const currentBundle = await loadBundleWithPIN(pin)
+          const updatedBundle: ConfigBundle = {
+            ...currentBundle,
+            supabase: { url: apiFields.supabaseUrl, anon_key: apiFields.supabaseKey },
+            azure: { endpoint: apiFields.azureEndpoint, key: apiFields.azureKey },
+            gemini: { key: apiFields.geminiKey },
+          }
+
+          const salt = Uint8Array.from(pinSaltHex.match(/.{2}/g)!.map((h: string) => parseInt(h, 16))) as unknown as Uint8Array<ArrayBuffer>
+          await saveBundleWithPIN(pin, updatedBundle, salt)
+
+          const alphaWrapped = localStorage.getItem('config_bundle_wrapped_alpha')
+          if (alphaWrapped && dataKey) {
+            const { assertWebAuthn } = await import('@/lib/webauthn')
+            try {
+              const result = await assertWebAuthn()
+              if (result.kind === 'prf') {
+                await saveBundleWithAlpha(result.wrappingKey, updatedBundle)
+              }
+            } catch {
+              // alpha update optional
+            }
+          }
+
+          setApiSaveMsg('保存しました')
+          setPinModal(null)
+          setTimeout(() => setApiSaveMsg(''), 3000)
+        } catch (e) {
+          setApiSaveMsg(e instanceof Error ? e.message : '保存に失敗しました')
+        } finally {
+          setApiSaving(false)
+        }
+      },
+    })
   }, [bundle, apiFields, dataKey])
 
   // ── Display settings ───────────────────────────────────────────────────────
@@ -262,23 +280,29 @@ export default function SettingsPage() {
   )
   const [fontSavingMsg, setFontSavingMsg] = useState('')
 
-  const handleFontSave = useCallback(async (newSize: ConfigBundle['fontSizePreference']) => {
+  const handleFontSave = useCallback((newSize: ConfigBundle['fontSizePreference']) => {
     if (!bundle) return
     setFontSize(newSize)
-    try {
-      const pinSaltHex = localStorage.getItem('config_bundle_pin_salt')
-      if (!pinSaltHex) return
-      const pin = window.prompt('設定を保存するためPINを入力してください')
-      if (!pin) return
-      const currentBundle = await loadBundleWithPIN(pin)
-      const updatedBundle: ConfigBundle = { ...currentBundle, fontSizePreference: newSize }
-      const salt = Uint8Array.from(pinSaltHex.match(/.{2}/g)!.map((h: string) => parseInt(h, 16))) as unknown as Uint8Array<ArrayBuffer>
-      await saveBundleWithPIN(pin, updatedBundle, salt)
-      setFontSavingMsg('保存しました')
-      setTimeout(() => setFontSavingMsg(''), 2000)
-    } catch (e) {
-      setFontSavingMsg(e instanceof Error ? e.message : '保存に失敗しました')
-    }
+    setPinModal({
+      show: true,
+      title: '設定を保存するためPINを入力してください',
+      onConfirm: async (pin: string) => {
+        try {
+          if (!pin) return
+          const pinSaltHex = localStorage.getItem('config_bundle_pin_salt')
+          if (!pinSaltHex) return
+          const currentBundle = await loadBundleWithPIN(pin)
+          const updatedBundle: ConfigBundle = { ...currentBundle, fontSizePreference: newSize }
+          const salt = Uint8Array.from(pinSaltHex.match(/.{2}/g)!.map((h: string) => parseInt(h, 16))) as unknown as Uint8Array<ArrayBuffer>
+          await saveBundleWithPIN(pin, updatedBundle, salt)
+          setFontSavingMsg('保存しました')
+          setPinModal(null)
+          setTimeout(() => setFontSavingMsg(''), 2000)
+        } catch (e) {
+          setFontSavingMsg(e instanceof Error ? e.message : '保存に失敗しました')
+        }
+      },
+    })
   }, [bundle])
 
   // ── .ambe export ───────────────────────────────────────────────────────────
@@ -288,25 +312,31 @@ export default function SettingsPage() {
 
   const handleAmbeExport = useCallback(async () => {
     if (!bundle) return
-    const pin = window.prompt('.ambe ファイルを暗号化するPINを入力してください')
-    if (!pin) return
     setAmbeExporting(true)
     setAmbeMsg('')
-    try {
-      const content = await exportAmbeFile(pin, bundle)
-      const blob = new Blob([content], { type: 'application/json' })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `ambe-backup-${new Date().toISOString().slice(0, 10)}.ambe`
-      a.click()
-      URL.revokeObjectURL(url)
-      setAmbeMsg('エクスポートしました')
-    } catch (e) {
-      setAmbeMsg(e instanceof Error ? e.message : 'エクスポートに失敗しました')
-    } finally {
-      setAmbeExporting(false)
-    }
+    setPinModal({
+      show: true,
+      title: '.ambe ファイルを暗号化するPINを入力してください',
+      onConfirm: async (pin: string) => {
+        try {
+          if (!pin) return
+          const content = await exportAmbeFile(pin, bundle)
+          const blob = new Blob([content], { type: 'application/json' })
+          const url = URL.createObjectURL(blob)
+          const a = document.createElement('a')
+          a.href = url
+          a.download = `ambe-backup-${new Date().toISOString().slice(0, 10)}.ambe`
+          a.click()
+          URL.revokeObjectURL(url)
+          setAmbeMsg('エクスポートしました')
+          setPinModal(null)
+        } catch (e) {
+          setAmbeMsg(e instanceof Error ? e.message : 'エクスポートに失敗しました')
+        } finally {
+          setAmbeExporting(false)
+        }
+      },
+    })
   }, [bundle])
 
   // ── Connection tests ───────────────────────────────────────────────────────
@@ -348,6 +378,23 @@ export default function SettingsPage() {
   return (
     <div className="flex flex-col gap-3 px-4 py-4 pb-8">
       <h1 className="text-base font-bold text-foreground px-1">設定</h1>
+
+      {/* C-3: Backup confirmation banner */}
+      {!mnemonicConfirmed && (
+        <div className="rounded-2xl border border-amber-500/40 bg-amber-500/10 p-3">
+          <p className="text-xs font-semibold text-amber-400">⚠️ リカバリーフレーズを確認してください</p>
+          <p className="mt-0.5 text-xs text-amber-300/70">
+            未確認のままデバイスを失うと、データを復元できません。
+          </p>
+          <button
+            onClick={() => router.push('/lock?mode=recovery')}
+            className="mt-2 rounded-xl bg-amber-500/20 px-3 py-1 text-xs text-amber-300 border border-amber-500/30
+              hover:bg-amber-500/30 transition-colors"
+          >
+            今すぐ確認する →
+          </button>
+        </div>
+      )}
 
       {/* セキュリティ */}
       <AccordionSection title="🔐 セキュリティ" defaultOpen>
@@ -640,6 +687,19 @@ export default function SettingsPage() {
           </button>
         </div>
       </AccordionSection>
+
+      {/* PinConfirmModal */}
+      {pinModal && (
+        <PinConfirmModal
+          title={pinModal.title}
+          onConfirm={pinModal.onConfirm}
+          onCancel={() => {
+            setPinModal(null)
+            setApiSaving(false)
+            setAmbeExporting(false)
+          }}
+        />
+      )}
     </div>
   )
 }

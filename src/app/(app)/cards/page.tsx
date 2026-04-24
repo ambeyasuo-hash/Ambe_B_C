@@ -191,6 +191,26 @@ export default function CardsPage() {
     load()
   }, [load])
 
+  // C-5: Supabase Realtime sync
+  useEffect(() => {
+    if (!bundle) return
+    const supabase = getSupabaseClient(bundle.supabase.url, bundle.supabase.anon_key)
+    const channel = supabase
+      .channel('business-cards-realtime')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'business_cards' },
+        () => {
+          load()
+        },
+      )
+      .subscribe()
+
+    return () => {
+      void supabase.removeChannel(channel)
+    }
+  }, [bundle, load])
+
   const handleAddCategory = useCallback(async () => {
     if (!bundle || !newCategoryName?.trim()) return
     setNewCategoryError(null)
