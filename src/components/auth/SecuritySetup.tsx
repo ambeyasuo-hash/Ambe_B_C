@@ -1,7 +1,9 @@
 'use client'
 
 import { useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { motion, AnimatePresence } from 'framer-motion'
+import { createClient } from '@supabase/supabase-js'
 import { registerWebAuthn } from '@/lib/webauthn'
 import { generateMnemonic24, deriveWrappingKeyFromMnemonic, deriveEncryptionSalt } from '@/lib/mnemonic'
 import { generateDataKey, wrapKey, deriveWrappingKeyFromPIN } from '@/lib/crypto'
@@ -62,6 +64,7 @@ CREATE TABLE IF NOT EXISTS categories (
 );`
 
 export default function SecuritySetup() {
+  const router = useRouter()
   const { unlock } = useVault()
   const [step, setStep] = useState<Step>(1)
   const [credentialId, setCredentialId] = useState('')
@@ -69,6 +72,8 @@ export default function SecuritySetup() {
     supabaseUrl: '', supabaseKey: '',
     azureEndpoint: '', azureKey: '', geminiKey: '',
   })
+  const [userEmail, setUserEmail] = useState('')
+  const [showVaultBlock, setShowVaultBlock] = useState(false)
   const [pin, setPin] = useState('')
   const [pinConfirm, setPinConfirm] = useState('')
   const [mnemonic, setMnemonic] = useState('')
@@ -116,10 +121,43 @@ export default function SecuritySetup() {
     }
   }
 
+  async function checkVaultExistence(supabaseUrl: string, anonKey: string, email: string) {
+    const supabase = createClient(supabaseUrl, anonKey)
+    const { data, error } = await supabase
+      .from('user_vault')
+      .select('id, encryption_salt, vault_generation')
+      .eq('user_email', email)
+      .maybeSingle()
+    if (error) throw error
+    return data
+  }
+
+  async function handleStep2Next() {
+    setLoading(true)
+    setError('')
+    try {
+      const vaultData = await checkVaultExistence(
+        apiConfig.supabaseUrl,
+        apiConfig.supabaseKey,
+        userEmail,
+      )
+      if (vaultData !== null) {
+        setShowVaultBlock(true)
+      } else {
+        setStep(3)
+      }
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
   function canProceedStep2() {
     return testStatus.supabase === 'ok' && testStatus.azure === 'ok' &&
       apiConfig.supabaseUrl && apiConfig.supabaseKey &&
-      apiConfig.azureEndpoint && apiConfig.azureKey
+      apiConfig.azureEndpoint && apiConfig.azureKey &&
+      userEmail.includes('@')
   }
 
   // ── Step 3: Set PIN ─────────────────────────────────────────────────────
@@ -171,7 +209,7 @@ export default function SecuritySetup() {
         wrapped_data_key_pin: wrappedPin,
         wrapped_data_key_beta: wrappedBeta,
         pin_salt: pinSaltHex,
-        userEmail: '',
+        userEmail,
         fontSizePreference: 'standard',
       }
 
@@ -223,6 +261,56 @@ export default function SecuritySetup() {
 
   return (
     <div className="flex flex-col flex-1 overflow-y-auto" style={{ paddingTop: '59px' }}>
+      {showVaultBlock && (
+        <motion.div
+          initial={{ opacity: 0, y: 16 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="flex flex-col flex-1 px-6 pb-8 gap-5 pt-6"
+        >
+          <div className="flex flex-col items-center gap-3">
+            <span style={{ fontSize: '48px' }}>⚠️</span>
+            <h1 className="text-xl font-bold text-center" style={{ color: 'var(--foreground)' }}>
+              Vault が既に存在します
+            </h1>
+            <p className="text-center text-sm leading-relaxed" style={{ color: 'var(--muted-foreground)' }}>
+              このメールアドレスには既存の Vault が存在します。別端末からQRペアリングで引き継ぐか、24ワードのリカバリーフレーズを入力してください。
+            </p>
+          </div>
+          <button
+            onClick={() => router.push('/lock?mode=qr-import')}
+            className="w-full py-4 rounded-2xl font-bold text-white"
+            style={{ background: 'linear-gradient(135deg, oklch(0.55 0.22 255), oklch(0.60 0.18 200))' }}
+          >
+            QRペアリングで引き継ぐ
+          </button>
+          <button
+            onClick={() => router.push('/lock?mode=recovery')}
+            className="w-full py-4 rounded-2xl font-bold"
+            style={{
+              background: 'var(--card)',
+              border: '1px solid var(--border)',
+              color: 'var(--foreground)',
+            }}
+          >
+            リカバリーフレーズで復元
+          </button>
+          <button
+            onClick={() => { setShowVaultBlock(false); setStep(2) }}
+            className="w-full py-3 rounded-2xl text-sm"
+            style={{ color: 'var(--muted-foreground)' }}
+          >
+            別のメールアドレスを使う
+          </button>
+          {error && (
+            <p className="text-sm text-center" style={{ color: 'oklch(0.577 0.245 27.325)' }}>
+              {error}
+            </p>
+          )}
+        </motion.div>
+      )}
+
+      {!showVaultBlock && (
+        <>
       {/* Progress dots */}
       <div className="flex justify-center gap-2 py-4">
         {([1, 2, 3, 4] as Step[]).map((s) => (
@@ -311,6 +399,21 @@ export default function SecuritySetup() {
                     SQL Editor ↗
                   </a>
                 </div>
+              </div>
+
+              {/* Email */}
+              <div className="flex flex-col gap-3">
+                <label className="text-xs font-bold uppercase tracking-wider" style={{ color: 'var(--muted-foreground)' }}>
+                  メールアドレス
+                </label>
+                <input
+                  type="email"
+                  placeholder="your@email.com"
+                  value={userEmail}
+                  onChange={(e) => setUserEmail(e.target.value)}
+                  className="w-full px-4 py-3 rounded-xl text-sm"
+                  style={{ background: 'var(--input)', color: 'var(--foreground)', border: '1px solid var(--border)' }}
+                />
               </div>
 
               {/* Supabase inputs */}
@@ -407,15 +510,15 @@ export default function SecuritySetup() {
               </div>
 
               <button
-                onClick={() => setStep(3)}
-                disabled={!canProceedStep2()}
+                onClick={handleStep2Next}
+                disabled={!canProceedStep2() || loading}
                 className="w-full py-4 rounded-2xl font-bold text-white mt-auto"
                 style={{
                   background: 'linear-gradient(135deg, oklch(0.55 0.22 255), oklch(0.60 0.18 200))',
-                  opacity: canProceedStep2() ? 1 : 0.4,
+                  opacity: canProceedStep2() && !loading ? 1 : 0.4,
                 }}
               >
-                次へ →
+                {loading ? '確認中...' : '次へ →'}
               </button>
             </>
           )}
@@ -549,6 +652,8 @@ export default function SecuritySetup() {
           )}
         </motion.div>
       </AnimatePresence>
+        </>
+      )}
     </div>
   )
 }

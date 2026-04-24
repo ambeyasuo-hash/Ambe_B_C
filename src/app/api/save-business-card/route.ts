@@ -14,6 +14,8 @@ interface SaveRequestBody {
   encryption_salt: string
   supabaseUrl: string
   supabaseAnonKey: string
+  userEmail: string
+  vaultGeneration?: number
 }
 
 export async function POST(request: Request) {
@@ -33,6 +35,8 @@ export async function POST(request: Request) {
       encryption_salt,
       supabaseUrl,
       supabaseAnonKey,
+      userEmail,
+      vaultGeneration,
     } = body
 
     if (!encrypted_data || !supabaseUrl || !supabaseAnonKey) {
@@ -43,6 +47,31 @@ export async function POST(request: Request) {
     }
 
     const supabase = createClient(supabaseUrl, supabaseAnonKey)
+
+    // Vault consistency check
+    if (userEmail) {
+      const { data: vaultRow, error: vaultErr } = await supabase
+        .from('user_vault')
+        .select('encryption_salt, vault_generation')
+        .eq('user_email', userEmail)
+        .single()
+
+      if (vaultErr || !vaultRow) {
+        return Response.json({ error: 'VAULT_NOT_FOUND' }, { status: 404 })
+      }
+
+      if (vaultRow.encryption_salt !== encryption_salt) {
+        return Response.json({ error: 'VAULT_SALT_MISMATCH' }, { status: 409 })
+      }
+
+      const clientGeneration: number = vaultGeneration ?? 1
+      if (clientGeneration < vaultRow.vault_generation) {
+        return Response.json(
+          { error: 'VAULT_GENERATION_STALE', serverGeneration: vaultRow.vault_generation },
+          { status: 409 },
+        )
+      }
+    }
 
     const { data, error } = await supabase
       .from('business_cards')

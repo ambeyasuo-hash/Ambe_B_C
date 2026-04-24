@@ -27,6 +27,7 @@ interface DecryptedCard {
   category: string | null
   thankYouSent: boolean
   colorIndex: number
+  decryptFailed?: boolean
 }
 
 const GRADIENT_CLASSES = [
@@ -59,6 +60,7 @@ export default function CardsPage() {
   const [cards, setCards] = useState<DecryptedCard[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [isKeyMismatch, setIsKeyMismatch] = useState(false)
 
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedCategory, setSelectedCategory] = useState<string>('すべて')
@@ -135,25 +137,43 @@ export default function CardsPage() {
       const rows = (data ?? []) as CardRow[]
       const decrypted = await Promise.all(
         rows.map(async (row, i): Promise<DecryptedCard> => {
-          const piiJson = await aesDecryptString(dataKey, row.encrypted_data)
-          const pii = JSON.parse(piiJson) as { name?: string; company?: string }
+          try {
+            const piiJson = await aesDecryptString(dataKey, row.encrypted_data)
+            const pii = JSON.parse(piiJson) as { name?: string; company?: string }
 
-          let thumbnailUrl: string | null = null
-          if (row.encrypted_thumbnail_front) {
-            thumbnailUrl = await aesDecryptString(dataKey, row.encrypted_thumbnail_front)
-          }
+            let thumbnailUrl: string | null = null
+            if (row.encrypted_thumbnail_front) {
+              thumbnailUrl = await aesDecryptString(dataKey, row.encrypted_thumbnail_front)
+            }
 
-          return {
-            id: row.id,
-            name: pii.name ?? '',
-            company: pii.company ?? '',
-            thumbnailUrl,
-            category: row.card_category,
-            thankYouSent: row.thank_you_sent,
-            colorIndex: i % 3,
+            return {
+              id: row.id,
+              name: pii.name ?? '',
+              company: pii.company ?? '',
+              thumbnailUrl,
+              category: row.card_category,
+              thankYouSent: row.thank_you_sent,
+              colorIndex: i % 3,
+              decryptFailed: false,
+            }
+          } catch {
+            return {
+              id: row.id,
+              name: '（復号失敗）',
+              company: '',
+              thumbnailUrl: null,
+              category: row.card_category,
+              thankYouSent: row.thank_you_sent,
+              colorIndex: i % 3,
+              decryptFailed: true,
+            }
           }
         }),
       )
+
+      const totalCards = decrypted.length
+      const failedCards = decrypted.filter((c) => c.decryptFailed).length
+      setIsKeyMismatch(totalCards > 0 && failedCards === totalCards)
 
       if (sortKey === 'name_asc') {
         decrypted.sort((a, b) => a.name.localeCompare(b.name, 'ja'))
@@ -306,6 +326,31 @@ export default function CardsPage() {
       </div>
       {newCategoryError && (
         <p className="px-4 pb-1 text-xs text-red-400">{newCategoryError}</p>
+      )}
+
+      {/* KEY_MISMATCH banner */}
+      {isKeyMismatch && (
+        <div className="mx-4 mt-4 rounded-2xl border border-red-500/40 bg-red-500/10 p-4">
+          <p className="text-sm font-semibold text-red-400">🔑 暗号キーが一致しません</p>
+          <p className="mt-1 text-xs text-red-300/80">
+            このデバイスの暗号キーは保存されたカードと異なります。
+            別端末でセットアップされた Vault の可能性があります。
+          </p>
+          <div className="mt-3 flex gap-2">
+            <button
+              onClick={() => router.push('/lock?mode=qr-import')}
+              className="rounded-xl bg-red-500/20 px-3 py-1.5 text-xs text-red-300 border border-red-500/30"
+            >
+              QRペアリングで修復
+            </button>
+            <button
+              onClick={() => router.push('/lock?mode=recovery')}
+              className="rounded-xl bg-red-500/20 px-3 py-1.5 text-xs text-red-300 border border-red-500/30"
+            >
+              リカバリーフレーズで復元
+            </button>
+          </div>
+        </div>
       )}
 
       {/* Card list */}
