@@ -1,8 +1,8 @@
-# あんべの名刺代わり — 実装ロードマップ v6.1.0
+# あんべの名刺代わり — 実装ロードマップ v6.1.1
 # Phoenix Rebuild Edition
 
 **作成日**: 2026-04-21  
-**更新日**: 2026-04-21  
+**更新日**: 2026-04-24  
 **ベース仕様**: design_doc_v6_0_3.md / CLAUDE.md v6.0.0  
 **対応モックアップ**: mockup_v6_8.html（①〜⑲ 全20画面）
 
@@ -66,8 +66,16 @@
 
 > **注意**: `CRON_SECRET` および `vercel.json` Cron 定義は不要（廃止）。Supabase 生存維持は GitHub Actions テンプレート方式（design_doc Section 5.5）に統一。
 
+> **★ v6.0.3 追加**: `user_vault` テーブルの SQL には必ず以下を含めること:
+> - `user_email TEXT NOT NULL UNIQUE` — 1 ユーザー 1 Vault を DB レベルで強制
+> - `wrapped_data_key_pin TEXT NOT NULL` — PIN 保護層（3 層目）
+> - `vault_generation INTEGER NOT NULL DEFAULT 1` — ステール書き込み防止
+>
+> 詳細は design_doc Section 7.3 / 7.5 の SQL を参照。
+
 ### 完了条件
-- [ ] Supabase で両テーブルが存在し、RLS ポリシーが設定されている
+- [ ] Supabase で全テーブルが存在し、RLS ポリシーが設定されている
+- [ ] `user_vault` に `user_email UNIQUE` 制約が存在することを確認
 - [ ] `npm run build` が通る（空のプロジェクト）
 - [ ] Vercel にデプロイできる
 
@@ -109,12 +117,18 @@
 [3-3] src/lib/mnemonic.ts        — BIP-39 24単語 + HKDF 導出
 [3-4] src/lib/webauthn.ts        — WebAuthn 登録・認証・wrapping key 導出
 [3-5] src/lib/config-bundle.ts   — Config Bundle 組み立て・暗号化・復号（WebAuthn + PIN）
-[3-6] src/components/auth/SecuritySetup.tsx  — 初回セットアップ UI（⑨生体認証登録→③API設定→⑧PIN設定→⑩24単語バックアップ）
+[3-6] src/components/auth/SecuritySetup.tsx  — 初回セットアップ UI
+        ★ Step 2 終了時に Vault 存在確認チェックを必須実装（design_doc 3.1 [1.5]）
+        ★ 既存 Vault 検出時は fresh setup をブロックしインポートフローへ誘導
 [3-7] src/components/auth/LockScreen.tsx     — ロック画面 UI（①②）
 [3-8] src/lib/pairing.ts + PairingExport/Import.tsx  — QR ペアリング（⑪⑫）
 [3-9] src/lib/ambe-file.ts + AmbeExport/Import.tsx   — .ambe 経路（⑬⑭）
 [3-10] 緊急リカバリ UI（⑮⑯）— 24単語入力 + 完全全滅フロー
 [3-11] 15分セッションタイマー — 右上表示・自動ロック
+[3-12] ★ v6.0.3 新規: Vault 整合性テスト
+        セットアップ完了後に DevTools で確認:
+        - user_vault に user_email UNIQUE 行が 1 件のみ存在すること
+        - 同一 user_email で 2 回目の SecuritySetup がブロックされること
 ```
 
 ### 対応モックアップ画面
@@ -158,6 +172,10 @@
 [4-3] app/api/ocr/route.ts       — Next.js API Route（CORS 対策・Azure 呼び出し中継）
 [4-4] src/components/ScanPage.tsx  — カメラ → OCR → 確認・編集（⑥⑰⑱）
 [4-5] app/api/save-business-card/route.ts  — 暗号化・Blind Indexing・Supabase 保存
+        ★ v6.0.3 追加: リクエスト受信時に以下の整合性チェックを実装（design_doc 8.1）
+          1. user_vault WHERE user_email = $email AND encryption_salt = $salt を照会
+          2. 行なし → HTTP 409（鍵不整合エラー）
+          3. vault_generation がリクエスト < DB → HTTP 409（ステール書き込みエラー）
 ```
 
 ### 対応モックアップ画面
@@ -195,6 +213,10 @@
 [5-5] Supabase Realtime 同期 — LWW 競合解決
 [5-6] エラーメッセージ日本語化（全エラー）
 [5-7] Framer Motion アニメーション調整
+[5-8] ★ v6.0.3 新規: クライアントサイド鍵不整合検出 UI（design_doc 2.6 Layer 4）
+      - cards/page.tsx のカード一覧ロード時に全件復号失敗を検出
+      - "KEY_MISMATCH" 専用バナーを表示し保存ボタンを無効化
+      - 「24単語またはQRペアリングで鍵を同期してください」の復旧フローへ誘導
 ```
 
 ### 対応モックアップ画面
@@ -234,7 +256,11 @@
 | Config Bundle を localStorage に平文保存 | 必ず暗号化状態で保存 |
 | 暗号処理を Server Component で行う | `CryptoKey` はシリアライズ不可・Zero-Knowledge 違反。必ず `'use client'` の Context/Hooks 内で完結させる |
 | Vercel Cron / CRON_SECRET を使用する | v6.0.3 で廃止。GitHub Actions 直接 ping 方式に統一 |
+| **user_vault に user_email UNIQUE なしで INSERT する** | **多端末間の鍵不整合を引き起こす（design_doc 2.6 Layer 1 違反）** |
+| **Vault 存在確認をスキップして SecuritySetup を完了させる** | **同一ユーザーが 2 つの Vault を持ち名刺が相互復号不能になる** |
+| **保存 API で encryption_salt + user_email の整合性チェックを省略する** | **鍵不整合データの DB 書き込みを許してしまう（design_doc 2.6 Layer 3 違反）** |
+| **encryption_salt を UUID v4 のランダム値で生成する** | **完全全滅時に salt が復元できない。mnemonic から HKDF で決定論的導出すること** |
 
 ---
 
-**(c) 2026 ambe / Business_Card_Folder — Phoenix Rebuild Edition v6.1.0**
+**(c) 2026 ambe / Business_Card_Folder — Phoenix Rebuild Edition v6.1.1**

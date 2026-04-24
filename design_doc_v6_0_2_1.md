@@ -11,6 +11,7 @@
 
 | バージョン | 日付 | 主な変更 |
 |---|---|---|
+| v6.0.3 | 2026-04-24 | **Vault 整合性保証（多端末鍵不整合防止）を正式仕様化**。`user_vault` に `user_email UNIQUE` 制約・`vault_generation` カラムを追加。SecuritySetup に Vault 存在確認ステップを必須化。`/api/save-business-card` にサーバーサイドのソルト整合性チェックを追加。クライアントサイドの鍵不整合検出 UI を仕様化。禁止事項に「Vault 存在確認なしの fresh setup」を追加。Config Bundle に `wrapped_data_key_pin` を正式追加（v6.0.3 以降必須）。 |
 | v6.0.2 | 2026-04-21 | ホスティング・配布アーキテクチャの確定。Vercel を「土管」モデルに確定（ユーザーキーを環境変数に持たない）。GitHub Actions テンプレートがユーザーの Supabase に直接 ping する方式に統一（CRON_SECRET・Vercel Cron 廃止）。OCRプレビュー・確認・保存フロー（Section 9.11）を新設。お礼メール機能（Section 9.12）を新設。business_cards に `thank_you_sent` / `thank_you_sent_at` カラムを追加。|
 | v6.0.1 | 2026-04-21 | 名刺一覧・詳細・スキャン画面の UI 仕様を追加（Section 9.8〜9.10）。カスタムカテゴリ機能・サムネイル表示・スキャン時の向き自動検出を正式仕様化。DB に `card_category` カラムと `categories` テーブルを追加。 |
 | v6.0.0 | 2026-04-21 | 認証アーキテクチャを全面刷新（Config-as-Credential モデル導入）。PIN モード復活・必須化。QR ペアリング・.ambe ファイルを正式採用。v5.x 系のマスターキー/Data Key 混在呼称を Data Key に統一。旧 LocalStorage 互換フォールバックを廃止。 |
@@ -56,6 +57,8 @@
 {
   "v": 1,
   "encryption_salt": "uuid-xxxxxxxx-xxxx-xxxx",
+  "ambe_generation": 1,
+  "last_exported_at": "2026-04-24T00:00:00Z",
   "supabase": {
     "url": "https://xxx.supabase.co",
     "anon_key": "eyJhbGc..."
@@ -68,7 +71,9 @@
     "key": "AIza..."
   },
   "wrapped_data_key_alpha": "v1:iv:ct...",
+  "wrapped_data_key_pin":   "v1:iv:ct...",
   "wrapped_data_key_beta":  "v1:iv:ct...",
+  "pin_salt": "hex16bytes...",
   "userEmail": "user@example.com",
   "fontSizePreference": "standard"
 }
@@ -78,13 +83,16 @@
 
 | 項目 | 役割 | 必須 |
 |---|---|---|
-| `encryption_salt` | ユーザー識別子（Supabase の行特定に使用） | ✅ |
+| `encryption_salt` | Vault 識別子（Supabase の行特定・暗号化ソルト） | ✅ |
+| `ambe_generation` | Vault の世代番号（.ambe エクスポートごとに +1） | ✅ |
 | `supabase.url/anon_key` | データ保管先 | ✅ |
 | `azure.endpoint/key` | OCR 処理 | ✅ |
 | `gemini.key` | テンプレート生成 | ⚠️ 任意 |
-| `wrapped_data_key_alpha` | WebAuthn または PIN で保護された Data Key | ✅ |
-| `wrapped_data_key_beta` | 24 単語で保護された Data Key（リカバリ用） | ✅ |
-| `userEmail` | UX 向上（メール自動入力等） | ❌ |
+| `wrapped_data_key_alpha` | WebAuthn PRF 由来鍵で保護された Data Key | ✅ |
+| `wrapped_data_key_pin` | PIN/PBKDF2 由来鍵で保護された Data Key（v6.0.3 追加） | ✅ |
+| `wrapped_data_key_beta` | 24 単語 BIP-39 由来鍵で保護された Data Key（リカバリ用） | ✅ |
+| `pin_salt` | PIN wrapping の PBKDF2 ソルト（.ambe インポート時に必要） | ✅ |
+| `userEmail` | Vault 所有者の識別子（Vault 整合性検証にも使用） | ✅ |
 | `fontSizePreference` | UX 設定引き継ぎ | ❌ |
 
 ### 2.3 鍵の階層
@@ -161,6 +169,75 @@
 - ページ遷移・タブ閉鎖時は自動的に消える
 - 明示的ログアウト時はメモリを能動的にクリア
 
+### 2.6 Vault 整合性保証（多端末鍵不整合防止）
+
+#### 問題の本質
+
+複数端末が **異なる `encryption_salt` と異なる Data Key** でデータを保存すると、
+「端末 A で保存した名刺は端末 B では暗号のゴミに見える」という致命的な不整合が発生する。
+
+```
+【不整合が起きるシナリオ】
+
+端末 A: SecuritySetup 完了 → salt_A / DataKey_A
+        → 名刺を暗号化して保存（salt_A, ciphertext_A）
+
+端末 B: SecuritySetup を"fresh"で実行 → salt_B / DataKey_B
+        → 名刺を暗号化して保存（salt_B, ciphertext_B）
+
+結果: 端末 A は ciphertext_B を復号できない（鍵が違う）
+      端末 B は ciphertext_A を復号できない（鍵が違う）
+```
+
+根本原因: **`user_vault` テーブルが同一ユーザーの複数行作成を許していた**（`user_email` に UNIQUE 制約なし）
+
+#### 4 層防衛ライン
+
+```
+Layer 1: DB 制約（最強・破られない）
+  user_vault.user_email に UNIQUE 制約
+  → 同一メールで 2 行目を INSERT しようとすると DB が 409 Conflict で弾く
+
+Layer 2: SecuritySetup での事前チェック（UX）
+  API 認証情報入力 (Step 2) → 「次へ」押下時
+  → Supabase に SELECT: user_vault WHERE user_email = $email
+  → 既存行あり: 「既にVaultがあります。インポートしてください」を表示
+               → QR ペアリング / .ambe / 24 単語の選択肢を提示
+               → fresh setup をブロック
+  → 既存行なし: 通常の fresh setup を継続
+
+Layer 3: 保存 API のソルト整合性チェック（サーバー）
+  POST /api/save-business-card 受信時
+  → user_vault WHERE user_email = $email AND encryption_salt = $salt を照会
+  → 一致しない場合: HTTP 409 を返してデータ保存を物理的に阻止
+    エラーメッセージ: "暗号化鍵の不整合: このデバイスの鍵はサーバーに登録されたVaultと一致しません"
+
+Layer 4: クライアントサイド鍵不整合の検出（UX 最終防衛）
+  カード一覧ロード時に全件の AES 復号が失敗した場合
+  → "KEY_MISMATCH" エラーとして専用の復旧 UI を表示
+  → 「このデバイスの暗号鍵がサーバーと一致しません。24単語またはQRペアリングで鍵を同期してください」
+  → LockScreen の mnemonic / QR フローへ誘導
+  ※ 1 件だけ失敗 = データ破損。全件失敗 = 鍵不整合として区別する。
+```
+
+#### vault_generation によるステール書き込み防止
+
+`user_vault` の `vault_generation` カラム（INTEGER, DEFAULT 1）と Config Bundle の `ambe_generation` を同期させる。
+
+保存 API でチェック:
+```
+リクエストの vault_generation < DB の vault_generation
+→ HTTP 409: "古いバージョンのVaultです。最新の端末からQRペアリングで同期してください"
+```
+
+端末 A で設定変更（generation 更新）→ 端末 B が古い generation で書き込もうとすると弾く。
+
+#### 原則: 1 ユーザー 1 Vault
+
+- `user_vault.user_email` は `UNIQUE NOT NULL`
+- 新デバイス追加は必ず「既存端末からの転送（QR / .ambe / 24単語）」経由
+- Fresh setup が許されるのは `user_vault` に該当 `user_email` の行が存在しない場合のみ
+
 ---
 
 ## 3. 認証フロー詳細
@@ -173,13 +250,31 @@
     ├─ Azure endpoint / key
     └─ Gemini key (任意)
 
+[1.5] ★ Vault 存在確認チェック（v6.0.3 追加・必須）
+    入力された Supabase 認証情報を使い、即座に以下を照会:
+      SELECT id FROM user_vault WHERE user_email = $userEmail LIMIT 1
+    ┌─ 行あり（既存 Vault が存在する）
+    │   → "このメールアドレスには既にVaultが存在します" を表示
+    │   → fresh setup を完全ブロック
+    │   → 以下の選択肢を提示:
+    │       [📱 QR ペアリングで引き継ぐ]
+    │       [📁 .ambe ファイルから復元]
+    │       [🔑 24単語で復旧]
+    │   → 選択されたフローへ遷移（UNINITIALIZED → 各インポートフロー）
+    │
+    └─ 行なし（新規ユーザー）
+        → 通常の fresh setup を継続（以下 [2] へ）
+
 [2] アプリが自動生成
-    ├─ encryption_salt (UUID v4)
+    ├─ encryption_salt: 24単語 mnemonic から HKDF で決定論的に導出
+    │    encryption_salt = HKDF(mnemonic_seed, "encryption_salt", 16B)
+    │    ※ UUID v4 ではなく mnemonic から導出することで完全全滅時の復元を保証
     ├─ Data Key (AES-256 ランダム)
     └─ Recovery Mnemonic (BIP-39 24 単語)
 
 [3] Config Bundle を組み立て
-    （wrapped_data_key_alpha/beta を含む）
+    wrapped_data_key_alpha / wrapped_data_key_pin / wrapped_data_key_beta を含む
+    ambe_generation = 1, pin_salt を含む
 
 [4] 保護方式を設定（両方必須）
     ├─ 生体認証 (WebAuthn platform)
@@ -188,15 +283,18 @@
     │
     └─ PIN (4〜8 桁数字、必須)
        → PBKDF2-SHA256 (100,000 iterations) で wrapping key 導出
-       → Config Bundle を暗号化
+       → Config Bundle を暗号化（pin_salt を Bundle 内に埋め込む）
        → localStorage['config_bundle_wrapped_pin']
 
 [5] 24 単語の表示・保管確認
     ├─ 24 単語を画面表示
     ├─ ユーザーが「コピー」「.vcf エクスポート」「メール送信」のいずれかで保管
-    └─ 「保管した」チェックボックス → mnemonic_backed_up=true
+    └─ 「保管した」チェックボックス
+        → localStorage['mnemonic_confirmed'] = '1' をセット
+        → バックアップ警告バナーを非表示に
 
-[6] wrapped_data_key_alpha / beta を Supabase user_vault に保存
+[6] wrapped_data_key_alpha / wrapped_data_key_pin / wrapped_data_key_beta を
+    Supabase user_vault に保存（user_email / vault_generation も同時に保存）
 
 [7] Data Key をメモリへロード → UNLOCKED
 ```
@@ -665,33 +763,26 @@ CREATE INDEX idx_categories_encryption_salt ON categories (encryption_salt);
 - 削除時は紐づく `business_cards.card_category` を `NULL`（未分類）に更新
 - カテゴリ名は最大 20 文字
 
-```sql
-CREATE TABLE IF NOT EXISTS user_vault (
-  id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  encryption_salt         TEXT NOT NULL UNIQUE,
-  wrapped_data_key_alpha  TEXT NOT NULL,
-  wrapped_data_key_beta   TEXT NOT NULL,
-  created_at              TIMESTAMPTZ DEFAULT now(),
-  updated_at              TIMESTAMPTZ DEFAULT now()
-);
-
-ALTER TABLE user_vault ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "anon full access" ON user_vault FOR ALL TO anon USING (true) WITH CHECK (true);
-GRANT ALL ON user_vault TO anon;
-```
-
-wrapped 値フォーマット: `"v1:<iv_b64>:<ct_b64>"`
-
 ### 7.3 user_vault テーブル
 
-認証アーキテクチャの核。wrapped Data Key を保管する。
+認証アーキテクチャの核。wrapped Data Key と Vault 整合性情報を保管する。
 
 ```sql
 CREATE TABLE IF NOT EXISTS user_vault (
-  id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  encryption_salt         TEXT NOT NULL UNIQUE,
-  wrapped_data_key_alpha  TEXT NOT NULL,
-  wrapped_data_key_beta   TEXT NOT NULL,
+  id                      UUID    PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  -- Vault 識別子（ユーザーごとに 1 行を保証する UNIQUE 制約）
+  user_email              TEXT    NOT NULL UNIQUE,   -- ★ v6.0.3 追加
+  encryption_salt         TEXT    NOT NULL UNIQUE,
+
+  -- wrapped Data Keys（3 層保護）
+  wrapped_data_key_alpha  TEXT    NOT NULL,  -- WebAuthn PRF 由来鍵でラップ
+  wrapped_data_key_pin    TEXT    NOT NULL,  -- PIN/PBKDF2 由来鍵でラップ（v6.0.3 追加）
+  wrapped_data_key_beta   TEXT    NOT NULL,  -- Mnemonic BIP-39 由来鍵でラップ
+
+  -- Vault 世代番号（ステール書き込み防止に使用）
+  vault_generation        INTEGER NOT NULL DEFAULT 1,  -- ★ v6.0.3 追加
+
   created_at              TIMESTAMPTZ DEFAULT now(),
   updated_at              TIMESTAMPTZ DEFAULT now()
 );
@@ -701,6 +792,11 @@ CREATE POLICY "anon full access" ON user_vault
   FOR ALL TO anon USING (true) WITH CHECK (true);
 GRANT ALL ON user_vault TO anon;
 ```
+
+**設計上の重要ルール**:
+- `user_email UNIQUE` により 1 ユーザー 1 行を DB レベルで強制する（Section 2.6 Layer 1）
+- `encryption_salt` は 24 単語 mnemonic から HKDF で決定論的に導出する（完全全滅時の復元を保証）
+- `vault_generation` は Config Bundle の `ambe_generation` と同期し、古い端末からのステール書き込みを防ぐ
 
 wrapped 値フォーマット: `"v1:<iv_b64>:<ct_b64>"`
 
@@ -718,11 +814,22 @@ Supabase ダッシュボード → SQL Editor に貼り付けて実行する。
 -- ============================================================
 
 -- ① user_vault テーブル（認証・暗号鍵管理）
+-- ★ v6.0.3: user_email UNIQUE / wrapped_data_key_pin / vault_generation を追加
 CREATE TABLE IF NOT EXISTS user_vault (
-  id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  encryption_salt         TEXT NOT NULL UNIQUE,
-  wrapped_data_key_alpha  TEXT NOT NULL,
-  wrapped_data_key_beta   TEXT NOT NULL,
+  id                      UUID    PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  -- Vault 識別子（1 ユーザー 1 行を DB レベルで強制）
+  user_email              TEXT    NOT NULL UNIQUE,
+  encryption_salt         TEXT    NOT NULL UNIQUE,
+
+  -- wrapped Data Keys（3 層保護）
+  wrapped_data_key_alpha  TEXT    NOT NULL,
+  wrapped_data_key_pin    TEXT    NOT NULL,
+  wrapped_data_key_beta   TEXT    NOT NULL,
+
+  -- Vault 世代番号（ステール書き込み防止）
+  vault_generation        INTEGER NOT NULL DEFAULT 1,
+
   created_at              TIMESTAMPTZ DEFAULT now(),
   updated_at              TIMESTAMPTZ DEFAULT now()
 );
@@ -837,21 +944,56 @@ SELECT 'あんべの名刺代わり — セットアップ完了！' AS status;
 **Request**:
 ```json
 {
-  "name": "山田太郎",
-  "company": "株式会社ABC",
-  "title": "営業部長",
-  "email": "yamada@abc.co.jp",
-  "tel": "+81-90-1234-5678",
-  "address": "東京都渋谷区...",
-  "notes": "裏面全文テキスト",
-  "raw": "表面 OCR 生テキスト",
-  "thumbnailFront": "data:image/jpeg;base64,...",
-  "thumbnailBack": "data:image/jpeg;base64,...",
-  "scannedAt": "2026-04-20T00:00:00Z"
+  "encrypted_data":            "v1:iv:ct...",
+  "encrypted_thumbnail_front": "v1:iv:ct...",
+  "encrypted_thumbnail_back":  "v1:iv:ct...",
+  "search_hashes":             ["hmac1", "hmac2"],
+  "encryption_salt":           "uuid-xxxxxxxx",
+  "user_email":                "user@example.com",
+  "vault_generation":          1,
+  "card_category":             "業者",
+  "notes":                     "裏面全文テキスト（平文）",
+  "ocr_raw_text":              "表面 OCR 生テキスト",
+  "ocr_confidence":            0.92,
+  "scanned_at":                "2026-04-20T00:00:00Z",
+  "supabaseUrl":               "https://xxx.supabase.co",
+  "supabaseAnonKey":           "eyJhbGc..."
 }
 ```
 
-**クライアント側で行う処理**: 暗号化 + Blind Indexing を完了してから送信する。サーバーは平文 PII を受け取らない。サムネイルはクライアント側で AES-256-GCM 暗号化したうえで `encrypted_thumbnail_front` / `encrypted_thumbnail_back` として保存。
+**クライアント側で行う処理（送信前に必ず完了）**:
+1. PII を AES-256-GCM で暗号化 → `encrypted_data`
+2. サムネイルを AES-256-GCM で暗号化 → `encrypted_thumbnail_front/back`
+3. Blind Indexing: 名前・社名等を HMAC-SHA256 でハッシュ化 → `search_hashes`
+
+サーバーは平文 PII を一切受け取らない。
+
+**サーバーサイド処理（★ v6.0.3 追加: Vault 整合性チェック）**:
+```
+[1] リクエストの encryption_salt と user_email で user_vault を照会
+      SELECT id, vault_generation
+      FROM user_vault
+      WHERE user_email = $user_email
+        AND encryption_salt = $encryption_salt
+      LIMIT 1
+
+[2] 行が見つからない場合
+      → HTTP 409: { error: "暗号化鍵の不整合: このデバイスの鍵はサーバーに登録されたVaultと一致しません" }
+      → 保存を物理的に阻止
+
+[3] vault_generation のチェック
+      リクエストの vault_generation < DB の vault_generation の場合
+      → HTTP 409: { error: "古いバージョンのVaultです。最新の端末からQRペアリングで同期してください" }
+
+[4] 整合性確認済み → business_cards テーブルへ INSERT
+```
+
+**エラーレスポンス**:
+| HTTP | 意味 | クライアント側の対応 |
+|---|---|---|
+| 409 | 鍵不整合 / ステールVault | Layer 4 UI（KEY_MISMATCH バナー）を表示して保存ボタンを無効化 |
+| 400 | リクエスト不正 | バリデーションエラーをトースト表示 |
+| 500 | サーバーエラー | リトライ促進 |
 
 ### 8.2 /api/cron/keep-alive（廃止）
 
@@ -1426,7 +1568,7 @@ Section 5.5 参照。Vercel Cron は廃止。各ユーザーが自分の GitHub 
 
 ---
 
-## 13. やってはいけないこと（前回の教訓）
+## 13. やってはいけないこと（前回の教訓 + v6.0.3 追加）
 
 | 禁止事項 | 理由 |
 |---|---|
@@ -1438,6 +1580,10 @@ Section 5.5 参照。Vercel Cron は廃止。各ユーザーが自分の GitHub 
 | インラインスタイルでカラーコード直書き | デザイントークン管理が崩壊 |
 | 旧 LocalStorage 互換フォールバックを維持 | v5.x の頓挫原因。v6.0 では新設計一本化 |
 | master_key 呼称を復活させる | v6.0 では Data Key に統一 |
+| **user_vault に user_email UNIQUE 制約なしで INSERT する** | **多端末間の鍵不整合を引き起こす（Section 2.6 Layer 1 違反）** |
+| **Vault 存在確認をスキップして SecuritySetup を完了させる** | **同一ユーザーが 2 つの Vault を持つことになり名刺が相互に復号不能になる** |
+| **保存 API で encryption_salt / user_email の整合性チェックを省略する** | **鍵不整合データの DB 書き込みを許してしまう（Section 2.6 Layer 3 違反）** |
+| **encryption_salt を UUID v4 のランダム値で生成する** | **完全全滅時に salt が復元できなくなる。必ず mnemonic から HKDF で決定論的導出すること** |
 
 ---
 
@@ -1447,4 +1593,4 @@ Section 5.5 参照。Vercel Cron は廃止。各ユーザーが自分の GitHub 
 - オンボーディング実装: アプリ内の設定画面から、ユーザーが自身のSecretsを登録する手順をガイドするUIを実装。
 
 **(c) 2026 ambe / Business_Card_Folder**  
-**Phoenix Rebuild Edition v6.0.2**
+**Phoenix Rebuild Edition v6.0.3**
