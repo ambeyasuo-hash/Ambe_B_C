@@ -3,8 +3,9 @@
 import { deriveWrappingKeyFromSignature, toB64, fromB64 } from './crypto'
 
 const RP_NAME = 'あんべの名刺代わり'
-const LS_CREDENTIAL_ID = 'webauthn_credential_id'
-const LS_PRF_ENABLED   = 'webauthn_prf_enabled'
+const LS_CREDENTIAL_ID         = 'webauthn_credential_id'
+const LS_PRF_ENABLED           = 'webauthn_prf_enabled'
+const LS_CREDENTIAL_TRANSPORTS = 'webauthn_credential_transports'
 const PRF_SALT = new TextEncoder().encode('config-bundle-wrapping-key')
 
 function getRpId(): string | undefined {
@@ -49,8 +50,16 @@ export async function registerWebAuthn(userId: string, displayName: string): Pro
   const credentialId = toB64(credential.rawId)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const prfEnabled = !!(credential.getClientExtensionResults() as any)?.prf?.enabled
+
+  // 登録時の実際の transport を保存する。
+  // アサーション時にこれを allowCredentials に渡すことで、Chrome が
+  // Windows Hello 登録の場合は GPM を無視し、GPM 登録の場合は GPM を使う。
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const transports: string[] = (credential as any).response?.getTransports?.() ?? []
+
   localStorage.setItem(LS_CREDENTIAL_ID, credentialId)
   localStorage.setItem(LS_PRF_ENABLED, String(prfEnabled))
+  localStorage.setItem(LS_CREDENTIAL_TRANSPORTS, JSON.stringify(transports))
 
   return credentialId
 }
@@ -70,10 +79,26 @@ export async function assertWebAuthn(): Promise<AssertResult> {
   const prfEnabled = localStorage.getItem(LS_PRF_ENABLED) === 'true'
   const challenge  = crypto.getRandomValues(new Uint8Array(32))
 
+  // 登録時に保存した transports を復元し allowCredentials に渡す。
+  // これにより Chrome は登録時と同じ認証器を優先して選択する:
+  //   ['internal']       → Windows Hello のみ表示（GPM ポップアップを抑制）
+  //   ['hybrid', ...]    → Google Password Manager を使用（Android 等）
+  //   []                 → 保存なし → transport 未指定でフォールバック
+  const storedTransports = localStorage.getItem(LS_CREDENTIAL_TRANSPORTS)
+  const transports: AuthenticatorTransport[] = storedTransports
+    ? (JSON.parse(storedTransports) as AuthenticatorTransport[])
+    : []
+
+  const allowCredential: PublicKeyCredentialDescriptor = {
+    id: fromB64(credentialIdB64),
+    type: 'public-key',
+    ...(transports.length > 0 ? { transports } : {}),
+  }
+
   const assertion = await navigator.credentials.get({
     publicKey: {
       challenge,
-      allowCredentials: [{ id: fromB64(credentialIdB64), type: 'public-key' }],
+      allowCredentials: [allowCredential],
       userVerification: 'required',
       timeout: 60_000,
       ...(getRpId() ? { rpId: getRpId() } : {}),
@@ -116,4 +141,5 @@ export function hasRegisteredCredential(): boolean {
 export function clearCredential(): void {
   localStorage.removeItem(LS_CREDENTIAL_ID)
   localStorage.removeItem(LS_PRF_ENABLED)
+  localStorage.removeItem(LS_CREDENTIAL_TRANSPORTS)
 }
