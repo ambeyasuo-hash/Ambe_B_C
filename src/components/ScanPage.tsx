@@ -203,6 +203,11 @@ export default function ScanPage() {
 
     setIsAnalyzing(true)
     setCameraError(null)
+
+    // カメラストリームを先に停止してからネットワークリクエストを送る。
+    // カメラ稼働中の大容量送信はモバイルブラウザで ERR_INTERNET_DISCONNECTED を引き起こす。
+    stopCamera()
+
     try {
       if (side === 'front') {
         setFrontImageBase64(imageBase64)
@@ -234,11 +239,13 @@ export default function ScanPage() {
         setStep('preview')
       }
     } catch (e) {
+      // OCR 失敗時はカメラを再起動してリトライ可能にする
       setCameraError(e instanceof Error ? e.message : 'OCR 解析に失敗しました')
+      startCamera()
     } finally {
       setIsAnalyzing(false)
     }
-  }, [bundle, captureImage, side])
+  }, [bundle, captureImage, side, stopCamera, startCamera])
 
   // ── Save ───────────────────────────────────────────────────────────────────
 

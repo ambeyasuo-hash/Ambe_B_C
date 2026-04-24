@@ -121,10 +121,12 @@ export default function CardsPage() {
         }
       }
 
+      // created_at は NOT NULL DEFAULT now() で確実に存在するため sort に使用
+      // scanned_at は nullable のため sort 列として不安定
       if (sortKey !== 'name_asc') {
-        query = query.order('scanned_at', { ascending: sortKey === 'date_asc' })
+        query = query.order('created_at', { ascending: sortKey === 'date_asc' })
       } else {
-        query = query.order('scanned_at', { ascending: false })
+        query = query.order('created_at', { ascending: false })
       }
 
       const { data, error: fetchError } = await query

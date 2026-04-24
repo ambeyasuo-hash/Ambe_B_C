@@ -82,9 +82,16 @@ export default function LockScreen() {
       const dataKey = await unwrapKey(pinKey, bundle.wrapped_data_key_pin)
 
       // PRF アップグレード: 初回 PIN ログイン後に bundle を PRF key で再暗号化
+      // 重要: wrapped_data_key_alpha も PRF key で再ラップしてから保存する。
+      // セットアップ時は alphaKey = pinKey のため wrapped_data_key_alpha は PIN key で暗号化済み。
+      // そのまま saveBundleWithAlpha すると bundle 外側は PRF key だが
+      // 内部の wrapped_data_key_alpha は PIN key のまま → unlockWithAlpha で復号失敗になる。
       if (pendingPrfKey.current) {
         try {
-          await saveBundleWithAlpha(pendingPrfKey.current, bundle)
+          const { wrapKey } = await import('@/lib/crypto')
+          const rewrappedAlpha = await wrapKey(pendingPrfKey.current, dataKey)
+          const upgradedBundle = { ...bundle, wrapped_data_key_alpha: rewrappedAlpha }
+          await saveBundleWithAlpha(pendingPrfKey.current, upgradedBundle)
           pendingPrfKey.current = null
         } catch {
           // アップグレード失敗は致命的ではない。次回ログイン時に再試行される。
