@@ -31,7 +31,11 @@ export async function POST(request: Request) {
     }
 
     const base = azureEndpoint.endsWith('/') ? azureEndpoint : `${azureEndpoint}/`
-    const url = `${base}formrecognizer/documentModels/${model}:analyze?api-version=2023-07-31`
+    const params = new URLSearchParams({
+      'api-version': '2023-07-31',
+      locale: 'ja-JP',
+    })
+    const url = `${base}formrecognizer/documentModels/${model}:analyze?${params}`
 
     const analyzeRes = await fetch(url, {
       method: 'POST',

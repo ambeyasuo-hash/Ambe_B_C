@@ -101,6 +101,12 @@ const PREFECTURES = [
   '福岡', '佐賀', '長崎', '熊本', '大分', '宮崎', '鹿児島', '沖縄',
 ]
 
+// 日本人名の正規表現（姓 + 任意のスペース + 名）
+// 漢字・ひらがな・カタカナのみで構成される 2〜8 文字
+const JP_NAME_RE = /^[\u4e00-\u9faf\u3040-\u309f\u30a0-\u30ff]{1,4}[\s\u3000]{0,2}[\u4e00-\u9faf\u3040-\u309f\u30a0-\u30ff]{1,4}$/
+// アルファベット名（First Last 形式）
+const EN_NAME_RE = /^[A-Z][a-z]+([\s][A-Z][a-z]+){1,3}$/
+
 function parseRawTextFallback(rawText: string): Partial<BusinessCardOcrResult> {
   const lines = rawText.split('\n').map((l) => l.trim()).filter((l) => l.length > 0)
   const used = new Set<number>()
@@ -108,7 +114,7 @@ function parseRawTextFallback(rawText: string): Partial<BusinessCardOcrResult> {
 
   // ── Email ────────────────────────────────────────────────────────────────
   for (let i = 0; i < lines.length; i++) {
-    const m = lines[i].match(/[\w.+\-]+@[\w\-]+\.[\w.]+/)
+    const m = lines[i].match(/[\w.+\-]+@[\w.\-]+\.[a-zA-Z]{2,}/)
     if (m) {
       result.email = { value: m[0], confidence: 0.95 }
       used.add(i)
@@ -116,78 +122,161 @@ function parseRawTextFallback(rawText: string): Partial<BusinessCardOcrResult> {
     }
   }
 
-  // ── Phone (TEL/FAX ラベル優先 → 数字パターン) ─────────────────────────
-  const telLabelRe = /(?:Tel|TEL|電話|携帯|Mobile|HP)[.：:.\s]*([0-9（）()\-\s+]{8,20})/i
-  const telBareRe = /(?:^|[\s：:])([0-9]{2,4}[-\s][0-9]{2,4}[-\s][0-9]{3,4})(?:$|[\s])/
+  // ── URL（使用済みマークのみ、フィールドには含めない） ─────────────────
+  for (let i = 0; i < lines.length; i++) {
+    if (/https?:\/\/|www\./i.test(lines[i])) used.add(i)
+  }
+
+  // ── Phone (TEL/FAX ラベル優先 → 裸の数字パターン) ────────────────────
+  // ラベル付きを優先 (Tel:, TEL, 電話, 携帯, Mobile, HP, FAX)
+  const telLabelRe = /(?:Tel|TEL|Fax|FAX|電話|携帯|Mobile|HP)[.：:.\s]*([0-9０-９（）()\-\s+]{7,20})/i
+  // 裸のパターン: 市外局番-市内局番-加入者番号 (固定・携帯・フリーダイヤル)
+  const telBareRe = /(?:^|[\s　])(\+?(?:81[-\s]?)?(?:0\d{1,4}[-\s]\d{2,4}[-\s]\d{3,4}|0\d{9,10}))(?:$|[\s　,，])/
   for (let i = 0; i < lines.length; i++) {
     if (used.has(i)) continue
-    let m = lines[i].match(telLabelRe) ?? lines[i].match(telBareRe)
-    if (m) {
-      result.tel = { value: (m[1] ?? m[0]).trim(), confidence: 0.9 }
+    const ml = lines[i].match(telLabelRe)
+    if (ml) {
+      result.tel = { value: ml[1].trim(), confidence: 0.92 }
       used.add(i)
       break
     }
-  }
-
-  // ── Address (郵便番号 or 都道府県 or 住所キーワード) ───────────────────
-  for (let i = 0; i < lines.length; i++) {
-    if (used.has(i)) continue
-    const l = lines[i]
-    const isAddr =
-      /〒?\d{3}-?\d{4}/.test(l) ||
-      PREFECTURES.some((p) => l.includes(p)) ||
-      /(?:市|区|町|村|丁目|番地|号室|\d+F|\d+階)/.test(l)
-    if (isAddr) {
-      let addr = l
-      // 次の行がビル名などの補足なら結合する
-      if (i + 1 < lines.length && !used.has(i + 1)) {
-        const next = lines[i + 1]
-        if (/(?:ビル|タワー|センター|フロア|号室|\d+F|\d+階)/.test(next)) {
-          addr += ' ' + next
-          used.add(i + 1)
-        }
-      }
-      result.address = { value: addr, confidence: 0.82 }
+    const mb = lines[i].match(telBareRe)
+    if (mb) {
+      result.tel = { value: mb[1].trim(), confidence: 0.85 }
       used.add(i)
       break
     }
   }
 
   // ── Company (法人形態キーワード) ──────────────────────────────────────
+  // ★ Address より先に検出して「社名が住所に誤認定」を防ぐ
   for (let i = 0; i < lines.length; i++) {
     if (used.has(i)) continue
     if (COMPANY_KEYWORDS.some((k) => lines[i].includes(k))) {
-      result.company = { value: lines[i], confidence: 0.88 }
+      result.company = { value: lines[i], confidence: 0.9 }
       used.add(i)
       break
     }
   }
 
-  // ── Title (役職キーワード) ────────────────────────────────────────────
+  // ── Address (郵便番号アンカー → 都道府県 → 住所キーワード) ────────────
+  // 〒XXX-XXXX がある行を最優先アンカーとし、以降の連続行を結合する
+  let addrStart = -1
   for (let i = 0; i < lines.length; i++) {
     if (used.has(i)) continue
-    if (TITLE_KEYWORDS.some((k) => lines[i].includes(k))) {
-      result.title = { value: lines[i], confidence: 0.78 }
-      used.add(i)
-      break
+    if (/〒\s?\d{3}[-ー]\d{4}/.test(lines[i])) { addrStart = i; break }
+  }
+  if (addrStart === -1) {
+    for (let i = 0; i < lines.length; i++) {
+      if (used.has(i)) continue
+      const l = lines[i]
+      if (
+        PREFECTURES.some((p) => l.includes(p)) ||
+        /(?:市|区|町|村|丁目|番地|番|号室|\d+F|\d+階)/.test(l)
+      ) { addrStart = i; break }
+    }
+  }
+  if (addrStart !== -1) {
+    let addr = lines[addrStart]
+    used.add(addrStart)
+    // 直後の行がビル名・フロア等の補足なら結合 (最大 2 行)
+    for (let j = addrStart + 1; j <= addrStart + 2 && j < lines.length; j++) {
+      if (used.has(j)) break
+      const next = lines[j]
+      if (/(?:ビル|タワー|センター|プラザ|フロア|号室|\d+F|\d+階|building|Building)/.test(next)) {
+        addr += ' ' + next
+        used.add(j)
+      } else {
+        break
+      }
+    }
+    result.address = { value: addr, confidence: 0.85 }
+  }
+
+  // ── Title + Name の同行分割 ───────────────────────────────────────────
+  // 例: "代表取締役社長 田中 太郎" → title="代表取締役社長", name="田中 太郎"
+  if (!result.name || !result.title) {
+    for (let i = 0; i < lines.length; i++) {
+      if (used.has(i)) continue
+      const l = lines[i]
+      const matchedTitle = TITLE_KEYWORDS.find((k) => l.startsWith(k))
+      if (matchedTitle) {
+        const rest = l.slice(matchedTitle.length).trim()
+        if (rest.length > 0 && (JP_NAME_RE.test(rest) || EN_NAME_RE.test(rest))) {
+          // 役職と名前が同じ行に入っている → 分割する
+          if (!result.title) result.title = { value: matchedTitle, confidence: 0.82 }
+          if (!result.name)  result.name  = { value: rest, confidence: 0.75 }
+          used.add(i)
+          break
+        } else if (!result.title) {
+          // 後ろに名前候補がなければ役職のみとして記録
+          result.title = { value: l, confidence: 0.8 }
+          used.add(i)
+          break
+        }
+      }
     }
   }
 
-  // ── Name (残った短い行 = 人名候補) ───────────────────────────────────
-  const remaining = lines.filter((l, i) => {
-    if (used.has(i)) return false
-    if (l.length > 25) return false            // 長すぎる → 名前ではない
-    if (/https?:\/\/|www\./.test(l)) return false // URL
-    if (/@/.test(l)) return false               // email
-    if (/\d{4,}/.test(l)) return false         // 長い数字列 (電話/郵便番号)
-    if (COMPANY_KEYWORDS.some((k) => l.includes(k))) return false
-    if (TITLE_KEYWORDS.some((k) => l.includes(k))) return false
-    return true
-  })
-  if (remaining.length > 0) {
-    // 最も短い行 (名前は会社名より短いことが多い) を採用
-    const nameLine = remaining.reduce((a, b) => (a.length <= b.length ? a : b))
-    result.name = { value: nameLine, confidence: 0.6 }
+  // ── Title (単独行) ────────────────────────────────────────────────────
+  if (!result.title) {
+    for (let i = 0; i < lines.length; i++) {
+      if (used.has(i)) continue
+      if (TITLE_KEYWORDS.some((k) => lines[i].includes(k))) {
+        result.title = { value: lines[i], confidence: 0.78 }
+        used.add(i)
+        break
+      }
+    }
+  }
+
+  // ── Name (未使用行から人名パターンで優先検出) ──────────────────────
+  if (!result.name) {
+    // まず日本人名・英語人名のパターンに合致する行を探す
+    for (let i = 0; i < lines.length; i++) {
+      if (used.has(i)) continue
+      const l = lines[i]
+      if (JP_NAME_RE.test(l) || EN_NAME_RE.test(l)) {
+        result.name = { value: l, confidence: 0.82 }
+        used.add(i)
+        break
+      }
+    }
+  }
+  if (!result.name) {
+    // パターン不一致の場合は「短くて連絡先でも会社名でもない行」から推定
+    const remaining = lines.filter((l, i) => {
+      if (used.has(i)) return false
+      if (l.length > 20) return false
+      if (/@/.test(l)) return false
+      if (/\d{4,}/.test(l)) return false
+      if (COMPANY_KEYWORDS.some((k) => l.includes(k))) return false
+      if (TITLE_KEYWORDS.some((k) => l.includes(k))) return false
+      return true
+    })
+    if (remaining.length > 0) {
+      const nameLine = remaining.reduce((a, b) => (a.length <= b.length ? a : b))
+      result.name = { value: nameLine, confidence: 0.55 }
+    }
+  }
+
+  // ── Company フォールバック (キーワードなしの場合) ─────────────────────
+  // 会社名キーワードが一切ない名刺向けに、未使用の長めの行を会社名候補とする
+  if (!result.company) {
+    const candidates = lines.filter((l, i) => {
+      if (used.has(i)) return false
+      if (l.length < 4) return false
+      if (/@/.test(l)) return false
+      if (/\d{4,}/.test(l)) return false
+      if (/https?:\/\/|www\./i.test(l)) return false
+      if (TITLE_KEYWORDS.some((k) => l.includes(k))) return false
+      return true
+    })
+    if (candidates.length > 0) {
+      // 最も長い行を会社名候補とする
+      const compLine = candidates.reduce((a, b) => (a.length >= b.length ? a : b))
+      result.company = { value: compLine, confidence: 0.45 }
+    }
   }
 
   return result
