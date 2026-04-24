@@ -74,6 +74,9 @@ export default function CardsPage() {
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [debouncedQuery, setDebouncedQuery] = useState('')
   const loadRef = useRef<() => Promise<void>>(() => Promise.resolve())
+  // マウントごとにユニークなチャンネル名を生成し、シングルトン Supabase クライアントでの
+  // チャンネル名衝突（"cannot add callbacks after subscribe()"）を防ぐ
+  const realtimeChannelName = useRef(`bc-rt-${Math.random().toString(36).slice(2)}`)
 
   useEffect(() => {
     if (appState !== 'UNLOCKED') {
@@ -205,7 +208,7 @@ export default function CardsPage() {
     if (!bundle) return
     const supabase = getSupabaseClient(bundle.supabase.url, bundle.supabase.anon_key)
     const channel = supabase
-      .channel('business-cards-realtime')
+      .channel(realtimeChannelName.current)
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'business_cards' },
