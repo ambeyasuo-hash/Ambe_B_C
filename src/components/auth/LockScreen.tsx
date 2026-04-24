@@ -17,8 +17,9 @@ import { unlockWithAlpha } from '@/lib/vault'
 import { fetchVaultRow } from '@/lib/vault'
 import { useVault } from '@/context/VaultContext'
 import { validateMnemonic24, deriveWrappingKeyFromMnemonic, deriveEncryptionSalt } from '@/lib/mnemonic'
+import QRPairingImport from '@/components/QRPairingImport'
 
-type LockMode = 'biometric' | 'pin' | 'reset' | 'ambe' | 'mnemonic'
+type LockMode = 'biometric' | 'pin' | 'reset' | 'ambe' | 'mnemonic' | 'qr-import'
 
 export default function LockScreen() {
   const { unlock } = useVault()
@@ -414,6 +415,15 @@ export default function LockScreen() {
           </motion.div>
         )}
 
+        {/* ── QR pairing import mode ── */}
+        {mode === 'qr-import' && (
+          <motion.div key="qr-import"
+            initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }}
+            className="flex flex-col w-full flex-1">
+            <QRPairingImport onClose={() => resetToMode(canUseBiometric ? 'biometric' : 'pin')} />
+          </motion.div>
+        )}
+
         {/* ── .ambe file recovery mode ── */}
         {mode === 'ambe' && (
           <motion.div key="ambe"
@@ -565,6 +575,13 @@ export default function LockScreen() {
                 exit={{ height: 0, opacity: 0 }}
                 className="overflow-hidden flex flex-col gap-2 pt-2"
               >
+                <button
+                  onClick={() => { setMode('qr-import'); setError('') }}
+                  className="w-full py-3 rounded-xl text-sm font-medium text-left px-4"
+                  style={{ background: 'var(--card)', border: '1px solid var(--border)', color: 'var(--foreground)' }}
+                >
+                  📱 別端末からQRで引き継ぐ
+                </button>
                 <button
                   onClick={() => { setMode('ambe'); setError('') }}
                   className="w-full py-3 rounded-xl text-sm font-medium text-left px-4"

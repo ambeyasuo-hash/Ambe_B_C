@@ -15,6 +15,7 @@ import { deriveWrappingKeyFromPIN, unwrapKey, wrapKey, randomBytes } from '@/lib
 import { registerWebAuthn, hasRegisteredCredential, isPrfEnabled } from '@/lib/webauthn'
 import { testSupabaseConnection } from '@/lib/vault'
 import { useRouter } from 'next/navigation'
+import QRPairingExport from '@/components/QRPairingExport'
 
 type TestState = 'idle' | 'testing' | 'ok' | 'error'
 
@@ -105,6 +106,10 @@ export default function SettingsPage() {
   useEffect(() => {
     if (appState !== 'UNLOCKED') router.replace('/')
   }, [appState, router])
+
+  // ── QR Pairing Export ─────────────────────────────────────────────────────
+
+  const [showQRExport, setShowQRExport] = useState(false)
 
   // ── Security: PIN change ───────────────────────────────────────────────────
 
@@ -409,7 +414,23 @@ export default function SettingsPage() {
           </motion.button>
           {biometricStatus && <p className="text-xs text-muted-foreground">{biometricStatus}</p>}
         </div>
+
+        <div className="border-t border-white/10 pt-4 flex flex-col gap-2">
+          <p className="text-xs text-muted-foreground font-medium">別端末への引き継ぎ</p>
+          <motion.button
+            whileTap={{ scale: 0.97 }}
+            onClick={() => setShowQRExport(true)}
+            className="w-full py-2.5 rounded-xl bg-card border border-white/20
+              text-foreground text-sm"
+          >
+            📱 別端末へQRで転送
+          </motion.button>
+        </div>
       </AccordionSection>
+
+      {showQRExport && bundle && (
+        <QRPairingExport bundle={bundle} onClose={() => setShowQRExport(false)} />
+      )}
 
       {/* API接続設定 */}
       <AccordionSection title="🔗 API接続設定">
