@@ -162,6 +162,7 @@ export default function ScanPage() {
   const [isSaving, setIsSaving] = useState(false)
   const [cameraError, setCameraError] = useState<string | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
+  const [scanLocation, setScanLocation] = useState<{ lat: number; lng: number; accuracy: number } | null>(null)
 
   const [frontImageBase64, setFrontImageBase64] = useState<string | null>(null)
   const [backImageBase64, setBackImageBase64] = useState<string | null>(null)
@@ -210,6 +211,17 @@ export default function ScanPage() {
       if (videoRef.current) {
         videoRef.current.srcObject = stream
       }
+      // 位置情報をカメラ起動と並行して取得（拒否されても続行）
+      navigator.geolocation?.getCurrentPosition(
+        (pos) =>
+          setScanLocation({
+            lat: pos.coords.latitude,
+            lng: pos.coords.longitude,
+            accuracy: pos.coords.accuracy,
+          }),
+        () => {},
+        { timeout: 10000, enableHighAccuracy: false },
+      )
     } catch {
       setCameraError('カメラへのアクセスが許可されていません。ブラウザの設定を確認してください。')
     }
@@ -241,12 +253,46 @@ export default function ScanPage() {
     const video = videoRef.current
     const canvas = canvasRef.current
     if (!video || !canvas) return null
-    canvas.width = video.videoWidth
-    canvas.height = video.videoHeight
+    const videoW = video.videoWidth
+    const videoH = video.videoHeight
+    if (!videoW || !videoH) return null
+
+    const screenW = window.innerWidth
+    const screenH = window.innerHeight
+    const portrait = screenH > screenW
+
+    // object-cover のスケール係数（画面を覆うために必要な拡大率）
+    const scale = Math.max(screenW / videoW, screenH / videoH)
+
+    // 画面の端でクリップされているビデオの開始位置（ビデオピクセル座標）
+    const visX = Math.max(0, (videoW - screenW / scale) / 2)
+    const visY = Math.max(0, (videoH - screenH / scale) / 2)
+
+    // フレームオーバーレイの寸法（スクリーンピクセル）
+    let frameW_screen: number, frameH_screen: number
+    if (portrait) {
+      frameH_screen = screenH * 0.75
+      frameW_screen = frameH_screen * (9 / 16)
+    } else {
+      frameW_screen = screenW * 0.88
+      frameH_screen = frameW_screen * (9 / 16)
+    }
+    const frameX_screen = (screenW - frameW_screen) / 2
+    const frameY_screen = (screenH - frameH_screen) / 2
+
+    // フレームをビデオピクセル座標へ変換してクロップ
+    const cropX = visX + frameX_screen / scale
+    const cropY = visY + frameY_screen / scale
+    const cropW = frameW_screen / scale
+    const cropH = frameH_screen / scale
+
+    canvas.width  = Math.round(cropW)
+    canvas.height = Math.round(cropH)
     const ctx = canvas.getContext('2d')
     if (!ctx) return null
-    ctx.drawImage(video, 0, 0)
-    return canvas.toDataURL('image/jpeg', 0.85)
+    ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, canvas.width, canvas.height)
+
+    return canvas.toDataURL('image/jpeg', 0.92)
   }, [])
 
   const handleCapture = useCallback(async () => {
@@ -307,7 +353,7 @@ export default function ScanPage() {
     setIsSaving(true)
     setSaveError(null)
     try {
-      // [1] Encrypt PII JSON
+      // [1] Encrypt PII JSON（位置情報も E2EE 対象として含める）
       const piiJson = JSON.stringify({
         name: editFields.name,
         company: editFields.company,
@@ -315,6 +361,11 @@ export default function ScanPage() {
         email: editFields.email,
         tel: editFields.tel,
         address: editFields.address,
+        ...(scanLocation && {
+          scanned_lat: scanLocation.lat,
+          scanned_lng: scanLocation.lng,
+          scanned_accuracy: scanLocation.accuracy,
+        }),
       })
       const encrypted_data = await aesEncryptString(dataKey, piiJson)
 
@@ -374,7 +425,7 @@ export default function ScanPage() {
     }
   }, [
     dataKey, bundle, editFields, frontImageBase64, backImageBase64,
-    ocrResult, backOcrResult, categories, selectedCategoryId, router,
+    ocrResult, backOcrResult, categories, selectedCategoryId, router, scanLocation,
   ])
 
   // ── Add category inline ────────────────────────────────────────────────────
@@ -407,7 +458,10 @@ export default function ScanPage() {
       : 'w-[88%] aspect-[16/9]'
 
     return (
-      <div className="fixed inset-0 z-50 bg-black">
+      <div
+        className="fixed inset-0 z-50 bg-black select-none"
+        onContextMenu={(e) => e.preventDefault()}
+      >
         {/* Camera feed */}
         {!cameraError && (
           <video
@@ -415,7 +469,10 @@ export default function ScanPage() {
             autoPlay
             muted
             playsInline
-            className="absolute inset-0 w-full h-full object-cover"
+            disablePictureInPicture
+            className="absolute inset-0 w-full h-full object-cover pointer-events-none"
+            onContextMenu={(e) => e.preventDefault()}
+            style={{ WebkitTouchCallout: 'none' } as React.CSSProperties}
           />
         )}
 
@@ -458,8 +515,11 @@ export default function ScanPage() {
         </div>
 
         {/* Bottom bar */}
-        <div className="absolute bottom-0 left-0 right-0 flex flex-col items-center gap-4 px-6 pb-12 pt-6
-          bg-gradient-to-t from-black/70 to-transparent">
+        <div
+          className="absolute bottom-0 left-0 right-0 flex flex-col items-center gap-4 px-6 pt-6
+            bg-gradient-to-t from-black/70 to-transparent"
+          style={{ paddingBottom: 'max(3rem, calc(env(safe-area-inset-bottom) + 1.5rem))' }}
+        >
           {cameraError ? (
             <button
               onClick={startCamera}

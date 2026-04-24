@@ -447,7 +447,6 @@ export async function analyzeBusinessCardFront(
   // ── ContactNames クレンジング ─────────────────────────────────────────
   // Azure の prebuilt-businessCard は日本語名刺で「営業課 田中太郎」のような
   // 所属＋氏名を ContactNames に丸ごと入れてしまうことがある。
-  // cleanNameField() でクライアントサイドのみで分離する（PII 外部送信なし）。
   const { name: cleanedName, title: inferredTitle } = cleanNameField(rawName, rawTitle)
 
   const structured = {
@@ -459,14 +458,22 @@ export async function analyzeBusinessCardFront(
     address: extractField(fields, 'Addresses', 'Address'),
   }
 
-  // prebuilt-businessCard が構造化フィールドを返さなかった場合（日本語名刺等）に
-  // rawText から正規表現でフォールバック抽出する
-  const hasAnyField = Object.values(structured).some(Boolean)
-  const fallback = (!hasAnyField && rawText) ? parseRawTextFallback(rawText) : {}
+  // rawText フォールバックを常に実行し、低信頼度の structured フィールドを補完する。
+  // 日本語名刺では prebuilt-businessCard の構造化精度が低いため常にマージする。
+  const fallback = rawText ? parseRawTextFallback(rawText) : {}
+
+  // 氏名は信頼度 0.7 未満なら fallback を優先（日本語名刺で特に効果あり）
+  const mergedName = (structured.name && structured.name.confidence >= 0.7)
+    ? structured.name
+    : (fallback.name ?? structured.name)
 
   return {
-    ...structured,
-    ...fallback,
+    name:    mergedName,
+    company: structured.company ?? fallback.company,
+    title:   structured.title   ?? fallback.title,
+    email:   structured.email   ?? fallback.email,
+    tel:     structured.tel     ?? fallback.tel,
+    address: structured.address ?? fallback.address,
     rawText,
     confidence: calcAvgConfidence(analyzeResult),
   }
