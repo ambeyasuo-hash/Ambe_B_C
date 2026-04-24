@@ -73,7 +73,7 @@ export default function CardsPage() {
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [debouncedQuery, setDebouncedQuery] = useState('')
-  const loadRef = useRef(load)
+  const loadRef = useRef<() => Promise<void>>(() => Promise.resolve())
 
   useEffect(() => {
     if (appState !== 'UNLOCKED') {
