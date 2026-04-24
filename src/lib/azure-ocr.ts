@@ -79,7 +79,7 @@ export async function analyzeBusinessCardFront(
   const res = await fetch('/api/ocr', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ image: imageBase64, model: 'prebuilt-layout', azureEndpoint, azureKey }),
+    body: JSON.stringify({ image: imageBase64, model: 'prebuilt-businessCard', azureEndpoint, azureKey }),
   })
   if (!res.ok) {
     const err = (await res.json().catch(() => ({}))) as { error?: string }
@@ -92,7 +92,7 @@ export async function analyzeBusinessCardFront(
 
   return {
     name: extractField(fields, 'ContactNames', 'Name', 'FirstName'),
-    company: extractField(fields, 'Organizations', 'Company', 'CompanyName'),
+    company: extractField(fields, 'CompanyNames', 'Organizations', 'Company', 'CompanyName'),
     title: extractField(fields, 'JobTitles', 'Title', 'JobTitle'),
     email: extractField(fields, 'Emails', 'Email', 'EmailAddress'),
     tel: extractField(fields, 'PhoneNumbers', 'Phone', 'Tel', 'MobilePhone'),

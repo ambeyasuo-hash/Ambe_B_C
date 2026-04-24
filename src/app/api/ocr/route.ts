@@ -1,6 +1,6 @@
 interface OcrRequestBody {
   image: string
-  model: 'prebuilt-layout' | 'prebuilt-read'
+  model: 'prebuilt-businessCard' | 'prebuilt-layout' | 'prebuilt-read'
   azureEndpoint: string
   azureKey: string
 }
