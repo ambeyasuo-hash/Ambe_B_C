@@ -18,6 +18,7 @@ interface VaultContextValue extends VaultState {
   lock: () => void
   setUninitialized: () => void
   resetSessionTimer: () => void
+  updateBundle: (bundle: ConfigBundle) => void
 }
 
 const VaultContext = createContext<VaultContextValue | null>(null)
@@ -59,6 +60,10 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     if (timerRef.current) clearTimeout(timerRef.current)
   }, [])
 
+  const updateBundle = useCallback((newBundle: ConfigBundle) => {
+    setBundle(newBundle)
+  }, [])
+
   // Initialize: determine state from localStorage (client only)
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -81,7 +86,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
   }, [appState, resetSessionTimer])
 
   return (
-    <VaultContext.Provider value={{ appState, dataKey, bundle, unlock, lock, setUninitialized, resetSessionTimer }}>
+    <VaultContext.Provider value={{ appState, dataKey, bundle, unlock, lock, setUninitialized, resetSessionTimer, updateBundle }}>
       {children}
     </VaultContext.Provider>
   )

@@ -18,26 +18,128 @@ import { useRouter } from 'next/navigation'
 import QRPairingExport from '@/components/QRPairingExport'
 import { PinConfirmModal } from '@/components/PinConfirmModal'
 
+// ── Supabase 初期セットアップ SQL ─────────────────────────────────────────────
+
+const SUPABASE_SETUP_SQL = `-- ============================================================
+-- あんべの名刺代わり — Supabase 初期セットアップ SQL
+-- Supabase Dashboard > SQL Editor に貼り付けて実行してください
+-- ============================================================
+
+-- ① user_vault テーブル（認証・暗号鍵管理）
+CREATE TABLE IF NOT EXISTS user_vault (
+  id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  encryption_salt         TEXT NOT NULL UNIQUE,
+  wrapped_data_key_alpha  TEXT NOT NULL,
+  wrapped_data_key_beta   TEXT NOT NULL,
+  created_at              TIMESTAMPTZ DEFAULT now(),
+  updated_at              TIMESTAMPTZ DEFAULT now()
+);
+
+ALTER TABLE user_vault ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "anon full access" ON user_vault
+  FOR ALL TO anon USING (true) WITH CHECK (true);
+
+GRANT ALL ON user_vault TO anon;
+
+-- ② business_cards テーブル（名刺データ）
+CREATE TABLE IF NOT EXISTS business_cards (
+  id                       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  encrypted_data           TEXT NOT NULL,
+  encrypted_thumbnail_front TEXT,
+  encrypted_thumbnail_back  TEXT,
+  search_hashes            TEXT[] NOT NULL DEFAULT '{}',
+  industry_category        TEXT,
+  card_category            TEXT,
+  attributes               JSONB NOT NULL DEFAULT '{}',
+  notes                    TEXT,
+  ocr_raw_text             TEXT,
+  encryption_salt          TEXT NOT NULL,
+  encryption_key_id        TEXT NOT NULL DEFAULT 'v1',
+  created_at               TIMESTAMPTZ DEFAULT now() NOT NULL,
+  updated_at               TIMESTAMPTZ DEFAULT now() NOT NULL,
+  scanned_at               TIMESTAMPTZ,
+  ocr_confidence           FLOAT,
+  thank_you_sent           BOOLEAN NOT NULL DEFAULT false,
+  thank_you_sent_at        TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_bc_encryption_salt ON business_cards (encryption_salt);
+CREATE INDEX IF NOT EXISTS idx_bc_created_at ON business_cards (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_bc_search_hashes ON business_cards USING GIN (search_hashes);
+CREATE INDEX IF NOT EXISTS idx_bc_card_category ON business_cards (card_category);
+CREATE INDEX IF NOT EXISTS idx_bc_industry ON business_cards (industry_category);
+
+-- ③ categories テーブル（ユーザー定義カテゴリ）
+CREATE TABLE IF NOT EXISTS categories (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  encryption_salt TEXT NOT NULL,
+  name            TEXT NOT NULL,
+  color_index     INT NOT NULL DEFAULT 0,
+  sort_order      INT NOT NULL DEFAULT 0,
+  created_at      TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_categories_encryption_salt ON categories (encryption_salt);
+
+-- ④ updated_at 自動更新トリガー
+CREATE OR REPLACE FUNCTION update_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = now();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE TRIGGER trg_business_cards_updated_at
+  BEFORE UPDATE ON business_cards
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+CREATE OR REPLACE TRIGGER trg_user_vault_updated_at
+  BEFORE UPDATE ON user_vault
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+SELECT 'あんべの名刺代わり — セットアップ完了！' AS status;`
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
 type TestState = 'idle' | 'testing' | 'ok' | 'error'
 
 function AccordionSection({
   title,
   children,
-  danger = false,
+  variant = 'default',
   defaultOpen = false,
 }: {
   title: string
   children: React.ReactNode
-  danger?: boolean
+  variant?: 'default' | 'danger' | 'warning'
   defaultOpen?: boolean
 }) {
   const [open, setOpen] = useState(defaultOpen)
+  const styles = {
+    default: {
+      wrapper: 'border-white/10',
+      header: 'text-foreground bg-card',
+      body: 'bg-card',
+    },
+    danger: {
+      wrapper: 'border-red-500/30',
+      header: 'text-red-400 bg-red-500/5',
+      body: 'bg-red-500/5',
+    },
+    warning: {
+      wrapper: 'border-amber-500/30',
+      header: 'text-amber-400 bg-amber-500/5',
+      body: 'bg-amber-500/5',
+    },
+  }[variant]
+
   return (
-    <div className={`rounded-2xl border overflow-hidden ${danger ? 'border-red-500/30' : 'border-white/10'}`}>
+    <div className={`rounded-2xl border overflow-hidden ${styles.wrapper}`}>
       <button
         onClick={() => setOpen((v) => !v)}
-        className={`w-full flex items-center justify-between px-4 py-3.5 text-sm font-semibold
-          ${danger ? 'text-red-400 bg-red-500/5' : 'text-foreground bg-card'}`}
+        className={`w-full flex items-center justify-between px-4 py-3.5 text-sm font-semibold ${styles.header}`}
       >
         <span>{title}</span>
         <span className="text-muted-foreground text-xs">{open ? '▲' : '▼'}</span>
@@ -51,7 +153,7 @@ function AccordionSection({
             transition={{ duration: 0.2 }}
             className="overflow-hidden"
           >
-            <div className={`px-4 pb-4 pt-2 flex flex-col gap-4 ${danger ? 'bg-red-500/5' : 'bg-card'}`}>
+            <div className={`px-4 pb-4 pt-2 flex flex-col gap-4 ${styles.body}`}>
               {children}
             </div>
           </motion.div>
@@ -100,11 +202,19 @@ function TestButton({ label, onTest }: { label: string; onTest: () => Promise<{ 
   )
 }
 
+// ── Main page ─────────────────────────────────────────────────────────────────
+
+const FONT_SIZE_MAP: Record<ConfigBundle['fontSizePreference'], string> = {
+  small: 'text-sm',
+  standard: 'text-base',
+  large: 'text-lg',
+  xlarge: 'text-xl',
+}
+
 export default function SettingsPage() {
-  const { bundle, dataKey, appState, lock } = useVault()
+  const { bundle, dataKey, appState, lock, updateBundle } = useVault()
   const router = useRouter()
 
-  // C-3: Backup confirmation banner
   const mnemonicConfirmed = typeof window !== 'undefined' && localStorage.getItem('mnemonic_confirmed') === '1'
 
   useEffect(() => {
@@ -140,7 +250,6 @@ export default function SettingsPage() {
     setPinChangeMsg('')
     try {
       const currentBundle = await loadBundleWithPIN(currentPin)
-      // pin_salt は bundle 内に保持（旧環境は localStorage にフォールバック）
       const saltHex = currentBundle.pin_salt ?? localStorage.getItem('config_bundle_pin_salt')!
       const salt = Uint8Array.from(saltHex.match(/.{2}/g)!.map((h: string) => parseInt(h, 16))) as unknown as Uint8Array<ArrayBuffer>
       const currentPinKey = await deriveWrappingKeyFromPIN(currentPin, salt)
@@ -150,12 +259,7 @@ export default function SettingsPage() {
       const newPinKey = await deriveWrappingKeyFromPIN(newPin, newSalt)
       const newWrappedDataKey = await wrapKey(newPinKey, dataKeyFromPin)
 
-      const updatedBundle: ConfigBundle = {
-        ...currentBundle,
-        wrapped_data_key_pin: newWrappedDataKey,
-        // pin_salt は saveBundleWithPIN が newSalt を使って自動更新する
-      }
-
+      const updatedBundle: ConfigBundle = { ...currentBundle, wrapped_data_key_pin: newWrappedDataKey }
       await saveBundleWithPIN(newPin, updatedBundle, newSalt)
 
       setCurrentPin('')
@@ -178,27 +282,23 @@ export default function SettingsPage() {
   const isBioPrf = typeof window !== 'undefined' && isPrfEnabled()
 
   const handleBiometricReregister = useCallback(async () => {
-    if (!bundle?.userEmail) return
+    if (!bundle) return
     setBiometricLoading(true)
     setBiometricStatus('')
     try {
-      await registerWebAuthn(bundle.userEmail, bundle.userEmail)
-      if (dataKey) {
-        const { loadBundleWithAlpha: _la, ...rest } = await import('@/lib/config-bundle')
-        void rest
-        const { assertWebAuthn } = await import('@/lib/webauthn')
-        const result = await assertWebAuthn()
-        if (result.kind === 'prf') {
-          await saveBundleWithAlpha(result.wrappingKey, bundle)
-        }
-      }
-      setBiometricStatus('再登録しました')
+      // userEmail が空の場合は encryption_salt を代替 ID として使用
+      const userId = bundle.userEmail || bundle.encryption_salt
+      await registerWebAuthn(userId, userId)
+      // 旧 alpha bundle をクリア。次回 PIN ログイン時に PRF Upgrade で再生成される
+      // (Windows Chrome での二重プロンプト防止のため assertWebAuthn はここでは呼ばない)
+      localStorage.removeItem('config_bundle_wrapped_alpha')
+      setBiometricStatus('再登録しました。次回ロック解除時に生体認証が有効になります')
     } catch (e) {
       setBiometricStatus(e instanceof Error ? e.message : '登録に失敗しました')
     } finally {
       setBiometricLoading(false)
     }
-  }, [bundle, dataKey])
+  }, [bundle])
 
   // ── API settings ───────────────────────────────────────────────────────────
 
@@ -211,6 +311,8 @@ export default function SettingsPage() {
   })
   const [apiSaving, setApiSaving] = useState(false)
   const [apiSaveMsg, setApiSaveMsg] = useState('')
+  const [showSql, setShowSql] = useState(false)
+  const [sqlCopied, setSqlCopied] = useState(false)
 
   useEffect(() => {
     if (bundle) {
@@ -257,10 +359,11 @@ export default function SettingsPage() {
                 await saveBundleWithAlpha(result.wrappingKey, updatedBundle)
               }
             } catch {
-              // alpha update optional
+              // alpha 更新は任意
             }
           }
 
+          updateBundle(updatedBundle)
           setApiSaveMsg('保存しました')
           setPinModal(null)
           setTimeout(() => setApiSaveMsg(''), 3000)
@@ -271,7 +374,7 @@ export default function SettingsPage() {
         }
       },
     })
-  }, [bundle, apiFields, dataKey])
+  }, [bundle, apiFields, dataKey, updateBundle])
 
   // ── Display settings ───────────────────────────────────────────────────────
 
@@ -279,6 +382,11 @@ export default function SettingsPage() {
     bundle?.fontSizePreference ?? 'standard',
   )
   const [fontSavingMsg, setFontSavingMsg] = useState('')
+
+  const applyFontSize = useCallback((size: ConfigBundle['fontSizePreference']) => {
+    document.documentElement.classList.remove(...Object.values(FONT_SIZE_MAP))
+    document.documentElement.classList.add(FONT_SIZE_MAP[size])
+  }, [])
 
   const handleFontSave = useCallback((newSize: ConfigBundle['fontSizePreference']) => {
     if (!bundle) return
@@ -295,6 +403,8 @@ export default function SettingsPage() {
           const updatedBundle: ConfigBundle = { ...currentBundle, fontSizePreference: newSize }
           const salt = Uint8Array.from(pinSaltHex.match(/.{2}/g)!.map((h: string) => parseInt(h, 16))) as unknown as Uint8Array<ArrayBuffer>
           await saveBundleWithPIN(pin, updatedBundle, salt)
+          updateBundle(updatedBundle)
+          applyFontSize(newSize)
           setFontSavingMsg('保存しました')
           setPinModal(null)
           setTimeout(() => setFontSavingMsg(''), 2000)
@@ -303,7 +413,7 @@ export default function SettingsPage() {
         }
       },
     })
-  }, [bundle])
+  }, [bundle, updateBundle, applyFontSize])
 
   // ── .ambe export ───────────────────────────────────────────────────────────
 
@@ -321,14 +431,24 @@ export default function SettingsPage() {
         try {
           if (!pin) return
           const content = await exportAmbeFile(pin, bundle)
+          const parsed = JSON.parse(content) as { ambe_generation?: number }
+          const gen = parsed.ambe_generation ?? 1
+          const date = new Date().toISOString().slice(0, 10).replace(/-/g, '')
           const blob = new Blob([content], { type: 'application/json' })
           const url = URL.createObjectURL(blob)
           const a = document.createElement('a')
           a.href = url
-          a.download = `ambe-backup-${new Date().toISOString().slice(0, 10)}.ambe`
+          a.download = `ambe-config-${date}-gen${gen}.ambe`
           a.click()
           URL.revokeObjectURL(url)
-          setAmbeMsg('エクスポートしました')
+          // VaultContext の bundle も world generation を更新
+          const updatedBundle: ConfigBundle = {
+            ...bundle,
+            ambe_generation: gen,
+            last_exported_at: new Date().toISOString(),
+          }
+          updateBundle(updatedBundle)
+          setAmbeMsg(`エクスポートしました（世代 ${gen}）`)
           setPinModal(null)
         } catch (e) {
           setAmbeMsg(e instanceof Error ? e.message : 'エクスポートに失敗しました')
@@ -337,7 +457,7 @@ export default function SettingsPage() {
         }
       },
     })
-  }, [bundle])
+  }, [bundle, updateBundle])
 
   // ── Connection tests ───────────────────────────────────────────────────────
 
@@ -364,7 +484,7 @@ export default function SettingsPage() {
     return res.ok ? { ok: true } : { ok: false, message: `HTTPエラー: ${res.status}` }
   }, [apiFields])
 
-  // ── Copy helper ────────────────────────────────────────────────────────────
+  // ── Copy helpers ───────────────────────────────────────────────────────────
 
   const [copyMsg, setCopyMsg] = useState('')
   const copyToClipboard = useCallback(async (text: string, label: string) => {
@@ -373,13 +493,19 @@ export default function SettingsPage() {
     setTimeout(() => setCopyMsg(''), 2000)
   }, [])
 
+  const handleCopySql = useCallback(async () => {
+    await navigator.clipboard.writeText(SUPABASE_SETUP_SQL)
+    setSqlCopied(true)
+    setTimeout(() => setSqlCopied(false), 2000)
+  }, [])
+
   if (!bundle) return null
 
   return (
     <div className="flex flex-col gap-3 px-4 py-4 pb-8">
       <h1 className="text-base font-bold text-foreground px-1">設定</h1>
 
-      {/* C-3: Backup confirmation banner */}
+      {/* バックアップ未確認バナー */}
       {!mnemonicConfirmed && (
         <div className="rounded-2xl border border-amber-500/40 bg-amber-500/10 p-3">
           <p className="text-xs font-semibold text-amber-400">⚠️ リカバリーフレーズを確認してください</p>
@@ -459,7 +585,11 @@ export default function SettingsPage() {
           >
             {biometricLoading ? '登録中...' : '生体認証を再登録'}
           </motion.button>
-          {biometricStatus && <p className="text-xs text-muted-foreground">{biometricStatus}</p>}
+          {biometricStatus && (
+            <p className={`text-xs ${biometricStatus.includes('失敗') ? 'text-red-400' : 'text-emerald-400'}`}>
+              {biometricStatus}
+            </p>
+          )}
         </div>
 
         <div className="border-t border-white/10 pt-4 flex flex-col gap-2">
@@ -482,62 +612,139 @@ export default function SettingsPage() {
       {/* API接続設定 */}
       <AccordionSection title="🔗 API接続設定">
         <div className="flex flex-col gap-3">
-          <div>
-            <label className="text-xs text-muted-foreground">Supabase URL</label>
+          {/* Supabase */}
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center justify-between">
+              <p className="text-xs text-muted-foreground font-medium">Supabase</p>
+              <a
+                href="https://supabase.com/dashboard"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-xs text-blue-400 hover:text-blue-300"
+              >
+                → ダッシュボードで取得 ↗
+              </a>
+            </div>
             <input
               value={apiFields.supabaseUrl}
               onChange={(e) => setApiFields((p) => ({ ...p, supabaseUrl: e.target.value }))}
-              className="mt-1 w-full rounded-xl bg-background border border-white/10 px-3 py-2
+              className="w-full rounded-xl bg-background border border-white/10 px-3 py-2
                 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-blue-500"
               placeholder="https://xxx.supabase.co"
             />
-          </div>
-          <div>
-            <label className="text-xs text-muted-foreground">Supabase Anon Key</label>
             <input
               value={apiFields.supabaseKey}
               onChange={(e) => setApiFields((p) => ({ ...p, supabaseKey: e.target.value }))}
-              className="mt-1 w-full rounded-xl bg-background border border-white/10 px-3 py-2
+              className="w-full rounded-xl bg-background border border-white/10 px-3 py-2
                 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-blue-500"
               placeholder="eyJhbGciOi..."
             />
-          </div>
-          <TestButton label="Supabase" onTest={testSupabase} />
+            <TestButton label="Supabase" onTest={testSupabase} />
 
-          <div className="border-t border-white/10 pt-3">
-            <label className="text-xs text-muted-foreground">Azure AI Endpoint</label>
+            {/* Supabase セットアップ SQL */}
+            <div className="rounded-xl border border-white/10 bg-background overflow-hidden">
+              <button
+                onClick={() => setShowSql((v) => !v)}
+                className="w-full flex items-center justify-between px-3 py-2 text-xs text-muted-foreground
+                  hover:bg-white/5 transition-colors"
+              >
+                <span>📋 初回セットアップ SQL</span>
+                <span>{showSql ? '▲' : '▼'}</span>
+              </button>
+              <AnimatePresence initial={false}>
+                {showSql && (
+                  <motion.div
+                    initial={{ height: 0 }}
+                    animate={{ height: 'auto' }}
+                    exit={{ height: 0 }}
+                    transition={{ duration: 0.2 }}
+                    className="overflow-hidden"
+                  >
+                    <div className="px-3 pb-3 flex flex-col gap-2">
+                      <p className="text-xs text-muted-foreground leading-relaxed">
+                        Supabase Dashboard → SQL Editor に貼り付けて実行してください。
+                      </p>
+                      <div className="flex gap-2">
+                        <motion.button
+                          whileTap={{ scale: 0.97 }}
+                          onClick={handleCopySql}
+                          className="flex-1 py-1.5 rounded-lg bg-gradient-to-r from-blue-500 to-cyan-400
+                            text-white text-xs font-semibold"
+                        >
+                          {sqlCopied ? '✓ コピーしました' : 'SQLをコピー'}
+                        </motion.button>
+                        <a
+                          href="https://supabase.com/dashboard/project/_/sql/new"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex-1 py-1.5 rounded-lg border border-white/20 text-muted-foreground text-xs
+                            text-center hover:bg-white/5 transition-colors"
+                        >
+                          SQL Editor を開く ↗
+                        </a>
+                      </div>
+                      <pre className="text-xs text-muted-foreground bg-black/30 rounded-lg p-3
+                        overflow-x-auto max-h-48 whitespace-pre leading-relaxed">
+                        {SUPABASE_SETUP_SQL}
+                      </pre>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+          </div>
+
+          {/* Azure */}
+          <div className="border-t border-white/10 pt-3 flex flex-col gap-2">
+            <div className="flex items-center justify-between">
+              <p className="text-xs text-muted-foreground font-medium">Azure AI Document Intelligence</p>
+              <a
+                href="https://portal.azure.com"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-xs text-blue-400 hover:text-blue-300"
+              >
+                → Portal で取得 ↗
+              </a>
+            </div>
             <input
               value={apiFields.azureEndpoint}
               onChange={(e) => setApiFields((p) => ({ ...p, azureEndpoint: e.target.value }))}
-              className="mt-1 w-full rounded-xl bg-background border border-white/10 px-3 py-2
+              className="w-full rounded-xl bg-background border border-white/10 px-3 py-2
                 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-blue-500"
               placeholder="https://xxx.cognitiveservices.azure.com/"
             />
-            <label className="text-xs text-muted-foreground mt-2 block">Azure Key</label>
             <input
               value={apiFields.azureKey}
               onChange={(e) => setApiFields((p) => ({ ...p, azureKey: e.target.value }))}
-              className="mt-1 w-full rounded-xl bg-background border border-white/10 px-3 py-2
+              className="w-full rounded-xl bg-background border border-white/10 px-3 py-2
                 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-blue-500"
               placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
             />
-            <div className="mt-2">
-              <TestButton label="Azure" onTest={testAzure} />
-            </div>
+            <TestButton label="Azure" onTest={testAzure} />
           </div>
 
-          <div className="border-t border-white/10 pt-3">
-            <label className="text-xs text-muted-foreground">Gemini API Key</label>
+          {/* Gemini */}
+          <div className="border-t border-white/10 pt-3 flex flex-col gap-2">
+            <div className="flex items-center justify-between">
+              <p className="text-xs text-muted-foreground font-medium">Gemini（任意）</p>
+              <a
+                href="https://aistudio.google.com/app/apikey"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-xs text-blue-400 hover:text-blue-300"
+              >
+                → AI Studio で取得 ↗
+              </a>
+            </div>
             <input
               value={apiFields.geminiKey}
               onChange={(e) => setApiFields((p) => ({ ...p, geminiKey: e.target.value }))}
-              className="mt-1 w-full rounded-xl bg-background border border-white/10 px-3 py-2
+              className="w-full rounded-xl bg-background border border-white/10 px-3 py-2
                 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-blue-500"
               placeholder="AIzaSy..."
             />
-            <div className="mt-2">
-              <TestButton label="Gemini" onTest={testGemini} />
-            </div>
+            <TestButton label="Gemini" onTest={testGemini} />
           </div>
 
           <motion.button
@@ -587,7 +794,7 @@ export default function SettingsPage() {
       <AccordionSection title="⚙️ GitHub Actions 生存維持">
         <div className="flex flex-col gap-3">
           <p className="text-xs text-muted-foreground leading-relaxed">
-            Vercel + Supabase の無料枠を維持するために定期実行が必要な場合は、以下の値を GitHub Actions の Secrets に設定してください。
+            Supabase 無料プランの自動停止を防ぐため、GitHub Actions テンプレートを設定してください。
           </p>
           <div>
             <p className="text-xs text-muted-foreground mb-1">SUPABASE_URL</p>
@@ -624,41 +831,53 @@ export default function SettingsPage() {
       </AccordionSection>
 
       {/* 緊急リカバリ */}
-      <AccordionSection title="🆘 緊急リカバリ" danger>
+      <AccordionSection title="🔴 緊急リカバリ (Emergency Recovery)" variant="warning">
         <div className="flex flex-col gap-3">
-          <div className="rounded-xl bg-red-500/10 border border-red-500/20 p-3">
-            <p className="text-xs text-muted-foreground leading-relaxed">
+          <div className="rounded-xl bg-amber-500/10 border border-amber-500/20 p-3">
+            <p className="text-xs text-amber-300/80 leading-relaxed">
               バックアップ情報は安全な場所に保管してください。紛失するとデータを復元できません。
             </p>
           </div>
 
           <div className="flex flex-col gap-2">
-            <p className="text-xs text-muted-foreground font-medium">24単語バックアップ</p>
+            <p className="text-xs text-amber-400 font-medium">24単語バックアップ</p>
             <p className="text-xs text-muted-foreground leading-relaxed">
               セキュリティセットアップ時に表示された24単語がバックアップフレーズです。安全な場所に記録しておいてください。
             </p>
+            <button
+              onClick={() => router.push('/lock?mode=recovery')}
+              className="w-full py-2 rounded-xl border border-amber-500/30 text-amber-400 text-xs
+                hover:bg-amber-500/10 transition-colors"
+            >
+              リカバリフレーズを確認する →
+            </button>
           </div>
 
-          <div className="flex flex-col gap-2 border-t border-red-500/20 pt-3">
-            <p className="text-xs text-muted-foreground font-medium">.ambe ファイルをエクスポート</p>
+          <div className="flex flex-col gap-2 border-t border-amber-500/20 pt-3">
+            <p className="text-xs text-amber-400 font-medium">.ambe ファイルをエクスポート</p>
             <p className="text-xs text-muted-foreground">
               設定データを暗号化ファイルとして保存します。PINでの確認が必要です。
             </p>
+            {bundle.last_exported_at && (
+              <p className="text-xs text-muted-foreground">
+                前回エクスポート: {new Date(bundle.last_exported_at).toLocaleDateString('ja-JP')}（世代 {bundle.ambe_generation}）
+              </p>
+            )}
             <motion.button
               whileTap={{ scale: 0.97 }}
               onClick={handleAmbeExport}
               disabled={ambeExporting}
-              className="w-full py-2.5 rounded-xl border border-red-500/30 text-red-400 text-sm disabled:opacity-40"
+              className="w-full py-2.5 rounded-xl border border-amber-500/30 text-amber-400 text-sm disabled:opacity-40"
             >
               {ambeExporting ? 'エクスポート中...' : '📁 .ambe をエクスポート'}
             </motion.button>
-            {ambeMsg && <p className="text-xs text-muted-foreground">{ambeMsg}</p>}
+            {ambeMsg && <p className="text-xs text-amber-300/70">{ambeMsg}</p>}
           </div>
         </div>
       </AccordionSection>
 
       {/* データ管理 */}
-      <AccordionSection title="🗑 データ管理" danger>
+      <AccordionSection title="🗑 データ管理" variant="danger">
         <div className="flex flex-col gap-3">
           <div className="rounded-xl bg-red-500/10 border border-red-500/20 p-3">
             <p className="text-xs font-bold text-red-400 mb-1">⚠️ 全データを削除します</p>
@@ -674,8 +893,7 @@ export default function SettingsPage() {
                 window.location.reload()
               }
             }}
-            className="w-full py-3 rounded-2xl text-white text-sm font-semibold"
-            style={{ background: 'oklch(0.577 0.245 27.325)' }}
+            className="w-full py-3 rounded-2xl bg-destructive text-white text-sm font-semibold"
           >
             削除して最初からやり直す
           </motion.button>
