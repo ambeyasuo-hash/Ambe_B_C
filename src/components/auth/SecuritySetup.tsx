@@ -26,15 +26,21 @@ interface ApiConfig {
 const SUPABASE_SQL = `-- あんべの名刺代わり — Supabase セットアップ SQL
 CREATE TABLE IF NOT EXISTS user_vault (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_email TEXT NOT NULL UNIQUE,
   encryption_salt TEXT NOT NULL UNIQUE,
   wrapped_data_key_alpha TEXT NOT NULL,
   wrapped_data_key_beta TEXT NOT NULL,
+  vault_generation INTEGER NOT NULL DEFAULT 1,
   created_at TIMESTAMPTZ DEFAULT now(),
   updated_at TIMESTAMPTZ DEFAULT now()
 );
 ALTER TABLE user_vault ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "anon full access" ON user_vault FOR ALL TO anon USING (true) WITH CHECK (true);
 GRANT ALL ON user_vault TO anon;
+
+-- 既存テーブルへのマイグレーション（すでに作成済みの場合はこちらも実行）
+ALTER TABLE user_vault ADD COLUMN IF NOT EXISTS user_email TEXT UNIQUE;
+ALTER TABLE user_vault ADD COLUMN IF NOT EXISTS vault_generation INTEGER NOT NULL DEFAULT 1;
 
 CREATE TABLE IF NOT EXISTS business_cards (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -128,7 +134,16 @@ export default function SecuritySetup() {
       .select('id, encryption_salt, vault_generation')
       .eq('user_email', email)
       .maybeSingle()
-    if (error) throw error
+    if (error) {
+      // user_email カラム未存在 → スキーマが古い。セットアップを続行させると
+      // 鍵不整合が発生するため、ここでブロックしてマイグレーションを促す。
+      if (error.message.includes('user_email') || error.code === '42703') {
+        throw new Error(
+          'Supabase のスキーマが古い状態です。「SQL をコピー」ボタンでマイグレーション SQL を実行してから再試行してください。',
+        )
+      }
+      throw error
+    }
     return data
   }
 
@@ -219,6 +234,7 @@ export default function SecuritySetup() {
 
       // Save wrapped keys to Supabase
       await saveVaultRow(bundle, {
+        user_email: userEmail,
         encryption_salt: encSalt,
         wrapped_data_key_alpha: wrappedAlpha,
         wrapped_data_key_beta: wrappedBeta,

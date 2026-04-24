@@ -13,6 +13,7 @@ export function makeSupabaseClient(url: string, anonKey: string) {
 // ── user_vault row ─────────────────────────────────────────────────────────
 
 export interface VaultRow {
+  user_email: string
   encryption_salt: string
   wrapped_data_key_alpha: string
   wrapped_data_key_beta: string
@@ -33,17 +34,18 @@ export async function createVaultEntry(
 // ── Persist wrapped keys to Supabase ──────────────────────────────────────
 
 export async function saveVaultRow(
-  config: Pick<ConfigBundle, 'supabase' | 'encryption_salt'>,
+  config: Pick<ConfigBundle, 'supabase' | 'encryption_salt' | 'userEmail'>,
   row: VaultRow,
 ): Promise<void> {
   const sb = makeSupabaseClient(config.supabase.url, config.supabase.anon_key)
   const { error } = await sb.from('user_vault').upsert(
     {
+      user_email: row.user_email,
       encryption_salt: row.encryption_salt,
       wrapped_data_key_alpha: row.wrapped_data_key_alpha,
       wrapped_data_key_beta: row.wrapped_data_key_beta,
     },
-    { onConflict: 'encryption_salt' },
+    { onConflict: 'user_email' },
   )
   if (error) throw new Error(`vault save failed: ${error.message}`)
 }
