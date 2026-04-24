@@ -73,6 +73,7 @@ export default function CardsPage() {
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [debouncedQuery, setDebouncedQuery] = useState('')
+  const loadRef = useRef(load)
 
   useEffect(() => {
     if (appState !== 'UNLOCKED') {
@@ -191,7 +192,15 @@ export default function CardsPage() {
     load()
   }, [load])
 
+  // loadRef を常に最新の load に更新（Realtime コールバック用）
+  useEffect(() => {
+    loadRef.current = load
+  }, [load])
+
   // C-5: Supabase Realtime sync
+  // bundle が変わった時だけチャンネルを再生成する。
+  // load は loadRef 経由で参照することで、検索/ソート変更のたびに
+  // チャンネルが再作成されて "subscribe() 後に .on() を呼んだ" エラーが出るのを防ぐ。
   useEffect(() => {
     if (!bundle) return
     const supabase = getSupabaseClient(bundle.supabase.url, bundle.supabase.anon_key)
@@ -201,7 +210,7 @@ export default function CardsPage() {
         'postgres_changes',
         { event: '*', schema: 'public', table: 'business_cards' },
         () => {
-          load()
+          loadRef.current()
         },
       )
       .subscribe()
@@ -209,7 +218,7 @@ export default function CardsPage() {
     return () => {
       void supabase.removeChannel(channel)
     }
-  }, [bundle, load])
+  }, [bundle])
 
   const handleAddCategory = useCallback(async () => {
     if (!bundle || !newCategoryName?.trim()) return
