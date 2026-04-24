@@ -79,6 +79,17 @@ export default function LockScreen({ initialMode }: { initialMode?: LockMode }) 
     setLoading(true)
     setError('')
     try {
+      // このブラウザ/アプリでセットアップされていない場合（Safari + Chrome 別々など）
+      if (!hasRegisteredCredential() || !hasBundleAlpha()) {
+        setError(
+          'この端末・ブラウザではまだセットアップされていません。' +
+          '「別の方法で復旧する」→「別端末からQRで引き継ぐ」か、' +
+          '「24単語で復旧」でデータを引き継いでください。',
+        )
+        setLoading(false)
+        return
+      }
+
       const result = await assertWebAuthn()
       if (result.kind === 'prf') {
         // PRF assertion 成功 → bundle が PRF key で暗号化されていれば直接復号
@@ -336,7 +347,7 @@ export default function LockScreen({ initialMode }: { initialMode?: LockMode }) 
             className="flex flex-col items-center gap-4 w-full">
             <motion.button
               onClick={handleBiometric}
-              disabled={loading || !canUseBiometric}
+              disabled={loading}
               whileHover={{ scale: 1.02, y: -2 }} whileTap={{ scale: 0.97 }}
               className="w-full py-4 rounded-2xl font-bold text-white"
               style={{ ...primaryBtn, opacity: loading ? 0.7 : 1 }}

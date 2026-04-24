@@ -85,14 +85,19 @@ export async function assertWebAuthn(): Promise<AssertResult> {
   //   ['hybrid', ...]    → Google Password Manager を使用（Android 等）
   //   []                 → 保存なし → transport 未指定でフォールバック
   const storedTransports = localStorage.getItem(LS_CREDENTIAL_TRANSPORTS)
-  const transports: AuthenticatorTransport[] = storedTransports
+  const parsedTransports: AuthenticatorTransport[] = storedTransports
     ? (JSON.parse(storedTransports) as AuthenticatorTransport[])
     : []
+  // transports 未保存 or 空の場合は 'internal' に固定する。
+  // 未指定のままにすると Chrome が Windows Hello + GPM を同時表示する既知の挙動がある。
+  // 本アプリは常に authenticatorAttachment: 'platform' で登録するため 'internal' が正しい。
+  const transports: AuthenticatorTransport[] =
+    parsedTransports.length > 0 ? parsedTransports : ['internal']
 
   const allowCredential: PublicKeyCredentialDescriptor = {
     id: fromB64(credentialIdB64),
     type: 'public-key',
-    ...(transports.length > 0 ? { transports } : {}),
+    transports,
   }
 
   const assertion = await navigator.credentials.get({
