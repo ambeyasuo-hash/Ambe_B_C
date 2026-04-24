@@ -72,6 +72,7 @@
     "key": "AIza..."
   },
   "wrapped_data_key_alpha": "v1:iv:ct...",
+  "wrapped_data_key_pin":   "v1:iv:ct...",
   "wrapped_data_key_beta":  "v1:iv:ct...",
   "userEmail": "user@example.com",
   "fontSizePreference": "standard"
@@ -88,8 +89,9 @@
 | `supabase.url/anon_key` | データ保管先 | ✅ |
 | `azure.endpoint/key` | OCR 処理 | ✅ |
 | `gemini.key` | テンプレート生成 | ⚠️ 任意 |
-| `wrapped_data_key_alpha` | WebAuthn 派生鍵または PIN で保護された Data Key | ✅ |
-| `wrapped_data_key_beta` | 24 単語で保護された Data Key（リカバリ用） | ✅ |
+| `wrapped_data_key_alpha` | WebAuthn PRF 派生鍵で保護された Data Key（PRF 非対応時は PIN 鍵で代替） | ✅ |
+| `wrapped_data_key_pin` | PIN 鍵専用で保護された Data Key（全端末共通の認証経路） | ✅ |
+| `wrapped_data_key_beta` | 24 単語で保護された Data Key（緊急リカバリ用） | ✅ |
 | `userEmail` | UX 向上（メール自動入力等） | ❌ |
 | `fontSizePreference` | UX 設定引き継ぎ | ❌ |
 
@@ -106,16 +108,18 @@
 └──────────────────────────────────────────────┘
                   ↓ 複数の鍵で保護
 ┌──────────────────────────────────────────────┐
-│  Level 1a: WebAuthn 派生鍵 (platform)        │
-│    → WebAuthn assertion signature から       │
-│      HKDF で wrapping key を導出             │
-│    → その wrapping key で Config Bundle を   │
-│      AES-GCM 復号する                        │
-│    → localStorage['config_bundle_alpha'] に  │
-│      暗号化状態で保管                        │
+│  Level 1a: WebAuthn PRF 派生鍵 (platform)    │
+│    → WebAuthn assertion の PRF extension     │
+│      から決定論的に wrapping key を導出      │
+│    → PRF 非対応環境（iOS Safari 等）では     │
+│      PIN Key で代替（後述の PRF Upgrade で   │
+│      初回 PIN ログイン後に昇格）             │
+│    → localStorage['config_bundle_wrapped_alpha']│
+│      に暗号化状態で保管                      │
 │                                               │
 │  Level 1b: PIN Key (PBKDF2-SHA256)           │
-│    → 生体認証 NG 時のフォールバック          │
+│    → 全端末共通の認証経路（必須）            │
+│    → wrapped_data_key_pin を保護             │
 │    → .ambe ファイル暗号化にも使用            │
 │    → デバイスに依存しない移行が可能          │
 │                                               │
@@ -147,7 +151,8 @@
 | 生体認証で暗号化された Config Bundle | localStorage | `config_bundle_wrapped_alpha` |
 | PIN で暗号化された Config Bundle | localStorage | `config_bundle_wrapped_pin` |
 | PIN で暗号化された Config Bundle (可搬) | `.ambe` ファイル | ユーザー管理 |
-| wrapped_data_key_alpha (WebAuthn) | Supabase user_vault + Config Bundle 内 | DB + ファイル |
+| wrapped_data_key_alpha (WebAuthn PRF) | Config Bundle 内 | ファイル |
+| wrapped_data_key_pin (PIN) | Config Bundle 内 | ファイル |
 | wrapped_data_key_beta (24 単語) | Supabase user_vault + Config Bundle 内 | DB + ファイル |
 | Recovery Mnemonic (24 単語) | ユーザーの紙・金庫 | 物理 |
 | 平文 Data Key | JS メモリ（UNLOCKED 時のみ） | ❌ 永続化禁止 |
@@ -472,23 +477,70 @@ v1 はバージョン番号。将来のアルゴリズム変更に備える。
 - `residentKey`: `'preferred'`
 - 対応認証キー: FaceID / Touch ID / Windows Hello / Android Biometric
 
-**WebAuthn の役割（v6.0.3 明確化）**:
+**WebAuthn の役割**:
 
 WebAuthn は「ユーザーを認証する」ためではなく、**「Config Bundle を復号する wrapping key を導出するため」**に使用する。
 
-```
-[登録時]
-WebAuthn registration → credentialId を localStorage に保存
+#### PRF Extension（鍵導出の正規経路）
 
-[認証時（LOCKED → UNLOCKED）]
-WebAuthn assertion（生体認証）
-  → authenticatorData + clientDataHash から signature を取得
-  → HKDF-SHA256(signature, info="config-bundle-wrapping-key") で wrapping key を導出
-  → AES-GCM で localStorage['config_bundle_alpha'] を復号
-  → Config Bundle を JS メモリに展開
-  → wrapped_data_key_alpha を unwrap → Data Key をメモリへ
-  → UNLOCKED
+WebAuthn `prf` extension を使用することで、同一の認証器と入力から**毎回同一の出力**を得られる（決定論的）。これを wrapping key の素材として使用する。
+
 ```
+assertion signature は毎回異なる（チャレンジが乱数のため）→ HKDF(signature) は鍵導出に使用不可
+PRF extension の出力は deterministic              → 安定した wrapping key を導出できる
+```
+
+| プラットフォーム | PRF 対応 | 認証方式 |
+|---|---|---|
+| Chrome (Windows/Mac/Android) | ✅ | 生体認証のみでロック解除 |
+| Safari (iOS/macOS) | ❌ | 生体認証 → PIN 入力（毎回） |
+| Chrome on iOS | ❌ (WebKit) | 生体認証 → PIN 入力（毎回） |
+
+#### 登録・認証フロー
+
+```
+[登録時（セットアップ Step 1）]
+navigator.credentials.create({ extensions: { prf: {} } })
+  → credentialId を localStorage['webauthn_credential_id'] に保存
+  → prf.enabled の結果を localStorage['webauthn_prf_enabled'] に保存
+
+[セットアップ完了時（handleFinalize）]
+assertWebAuthn() は呼ばない。
+理由: Windows Chrome では Windows Hello と Google Password Manager が
+     同時に起動し競合するため。alphaKey = pinKey で初期化する。
+
+[認証時（LOCKED → UNLOCKED）— PRF 対応端末]
+navigator.credentials.get({ extensions: { prf: { eval: { first: salt } } } })
+  → prf.results.first（決定論的出力）を取得
+  → HKDF-SHA256(prfOutput) で wrapping key を導出
+  → loadBundleWithAlpha(prfKey) で config_bundle_wrapped_alpha を復号
+  → 成功 → unlockWithAlpha → UNLOCKED
+  → 失敗（bundle が PIN 暗号化のまま = PRF Upgrade 未実施）
+      → pendingPrfKey に保持 → PIN 入力へフォールバック
+
+[認証時（LOCKED → UNLOCKED）— PRF 非対応端末]
+navigator.credentials.get()
+  → assertion 成功（生体認証 UX）
+  → prf 出力なし → { kind: 'no-prf' } → PIN 入力へフォールバック
+
+[PIN 認証時]
+PBKDF2(pin, config_bundle_pin_salt) → pinKey
+  → loadBundleWithPIN(pin) で config_bundle_wrapped_pin を復号
+  → unwrapKey(pinKey, bundle.wrapped_data_key_pin) → Data Key
+  → UNLOCKED
+  ↓（PRF Upgrade: pendingPrfKey が設定されていた場合）
+  saveBundleWithAlpha(prfKey, bundle) → config_bundle_wrapped_alpha を上書き
+  → 次回から生体認証のみでロック解除可能
+```
+
+#### ⚠️ 実装上の制約事項（実装で判明した問題と対処）
+
+| 問題 | 現象 | 対処 |
+|---|---|---|
+| assertion signature は非決定論的 | HKDF(signature) で毎回異なる wrapping key が生成され復号失敗 | PRF extension に切り替え |
+| Windows Chrome で二重プロンプト | handleFinalize で assertWebAuthn() を呼ぶと Windows Hello と GPM が同時起動し競合 | セットアップ時は assertWebAuthn() を呼ばない（alphaKey = pinKey で初期化、PRF Upgrade は初回ログイン後） |
+| iOS Safari / Chrome on iOS は PRF 非対応 | 毎回 PIN 入力が必要 | 正常動作として許容。UX メッセージで案内 |
+| rpId の固定が必要 | Vercel preview URL が変わるたびに credentialId が無効化される | `NEXT_PUBLIC_WEBAUTHN_RP_ID` 環境変数でホスト名を固定 |
 
 > **重要**: WebAuthn のみでは、デバイス紛失時にデータが完全に失われる。
 > PIN（Level 1b）と 24 単語（Level 2）がデバイス非依存の復旧経路として必須。
