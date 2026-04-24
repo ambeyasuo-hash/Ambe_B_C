@@ -202,6 +202,49 @@ function TestButton({ label, onTest }: { label: string; onTest: () => Promise<{ 
   )
 }
 
+function ServiceAccordion({
+  title,
+  badge,
+  children,
+  defaultOpen,
+}: {
+  title: string
+  badge?: React.ReactNode
+  children: React.ReactNode
+  defaultOpen: boolean
+}) {
+  const [open, setOpen] = useState(defaultOpen)
+  return (
+    <div className="rounded-xl border border-white/10 overflow-hidden">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-center justify-between px-3 py-2.5 hover:bg-white/5 transition-colors"
+      >
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-medium text-foreground">{title}</span>
+          {badge}
+        </div>
+        <span className="text-muted-foreground text-xs">{open ? '▲' : '▼'}</span>
+      </button>
+      <AnimatePresence initial={false}>
+        {open && (
+          <motion.div
+            initial={{ height: 0 }}
+            animate={{ height: 'auto' }}
+            exit={{ height: 0 }}
+            transition={{ duration: 0.2 }}
+            className="overflow-hidden"
+          >
+            <div className="px-3 pb-3 pt-1 flex flex-col gap-2">
+              {children}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  )
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 const FONT_SIZE_MAP: Record<ConfigBundle['fontSizePreference'], string> = {
@@ -313,6 +356,8 @@ export default function SettingsPage() {
   const [apiSaveMsg, setApiSaveMsg] = useState('')
   const [showSql, setShowSql] = useState(false)
   const [sqlCopied, setSqlCopied] = useState(false)
+  const [mnemonicWords, setMnemonicWords] = useState<string | null>(null)
+  const [keepAliveConfirmed, setKeepAliveConfirmed] = useState(false)
 
   useEffect(() => {
     if (bundle) {
@@ -325,6 +370,11 @@ export default function SettingsPage() {
       })
     }
   }, [bundle])
+
+  useEffect(() => {
+    setMnemonicWords(localStorage.getItem('mnemonic_words'))
+    setKeepAliveConfirmed(localStorage.getItem('keep_alive_confirmed') === '1')
+  }, [])
 
   const handleApiSave = useCallback(async () => {
     if (!bundle) return
@@ -499,6 +549,36 @@ export default function SettingsPage() {
     setTimeout(() => setSqlCopied(false), 2000)
   }, [])
 
+  const handleCopyMnemonic = useCallback(async () => {
+    if (!mnemonicWords) return
+    await navigator.clipboard.writeText(mnemonicWords)
+    setCopyMsg('24単語をコピーしました')
+    setTimeout(() => setCopyMsg(''), 2000)
+  }, [mnemonicWords])
+
+  const handleVcfExport = useCallback(() => {
+    if (!mnemonicWords) return
+    const vcf = [
+      'BEGIN:VCARD',
+      'VERSION:3.0',
+      'FN:あんべの名刺代わり',
+      `NOTE:${mnemonicWords}`,
+      'END:VCARD',
+    ].join('\r\n')
+    const blob = new Blob([vcf], { type: 'text/vcard' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'ambe-recovery.vcf'
+    a.click()
+    URL.revokeObjectURL(url)
+  }, [mnemonicWords])
+
+  const handleKeepAliveConfirm = useCallback((checked: boolean) => {
+    localStorage.setItem('keep_alive_confirmed', checked ? '1' : '0')
+    setKeepAliveConfirmed(checked)
+  }, [])
+
   if (!bundle) return null
 
   return (
@@ -613,18 +693,21 @@ export default function SettingsPage() {
       <AccordionSection title="🔗 API接続設定">
         <div className="flex flex-col gap-3">
           {/* Supabase */}
-          <div className="flex flex-col gap-2">
-            <div className="flex items-center justify-between">
-              <p className="text-xs text-muted-foreground font-medium">Supabase</p>
-              <a
-                href="https://supabase.com/dashboard"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-xs text-blue-400 hover:text-blue-300"
-              >
-                → ダッシュボードで取得 ↗
-              </a>
-            </div>
+          <ServiceAccordion
+            title="Supabase"
+            badge={apiFields.supabaseUrl && apiFields.supabaseKey
+              ? <span className="text-xs text-emerald-400">✓ 設定済み</span>
+              : undefined}
+            defaultOpen={!(apiFields.supabaseUrl && apiFields.supabaseKey)}
+          >
+            <a
+              href="https://supabase.com/dashboard"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="self-end text-xs text-blue-400 hover:text-blue-300"
+            >
+              → ダッシュボードで取得 ↗
+            </a>
             <input
               value={apiFields.supabaseUrl}
               onChange={(e) => setApiFields((p) => ({ ...p, supabaseUrl: e.target.value }))}
@@ -640,8 +723,7 @@ export default function SettingsPage() {
               placeholder="eyJhbGciOi..."
             />
             <TestButton label="Supabase" onTest={testSupabase} />
-
-            {/* Supabase セットアップ SQL */}
+            {/* セットアップ SQL */}
             <div className="rounded-xl border border-white/10 bg-background overflow-hidden">
               <button
                 onClick={() => setShowSql((v) => !v)}
@@ -692,21 +774,24 @@ export default function SettingsPage() {
                 )}
               </AnimatePresence>
             </div>
-          </div>
+          </ServiceAccordion>
 
           {/* Azure */}
-          <div className="border-t border-white/10 pt-3 flex flex-col gap-2">
-            <div className="flex items-center justify-between">
-              <p className="text-xs text-muted-foreground font-medium">Azure AI Document Intelligence</p>
-              <a
-                href="https://portal.azure.com"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-xs text-blue-400 hover:text-blue-300"
-              >
-                → Portal で取得 ↗
-              </a>
-            </div>
+          <ServiceAccordion
+            title="Azure AI Document Intelligence"
+            badge={apiFields.azureEndpoint && apiFields.azureKey
+              ? <span className="text-xs text-emerald-400">✓ 設定済み</span>
+              : undefined}
+            defaultOpen={!(apiFields.azureEndpoint && apiFields.azureKey)}
+          >
+            <a
+              href="https://portal.azure.com"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="self-end text-xs text-blue-400 hover:text-blue-300"
+            >
+              → Portal で取得 ↗
+            </a>
             <input
               value={apiFields.azureEndpoint}
               onChange={(e) => setApiFields((p) => ({ ...p, azureEndpoint: e.target.value }))}
@@ -722,21 +807,24 @@ export default function SettingsPage() {
               placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
             />
             <TestButton label="Azure" onTest={testAzure} />
-          </div>
+          </ServiceAccordion>
 
           {/* Gemini */}
-          <div className="border-t border-white/10 pt-3 flex flex-col gap-2">
-            <div className="flex items-center justify-between">
-              <p className="text-xs text-muted-foreground font-medium">Gemini（任意）</p>
-              <a
-                href="https://aistudio.google.com/app/apikey"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-xs text-blue-400 hover:text-blue-300"
-              >
-                → AI Studio で取得 ↗
-              </a>
-            </div>
+          <ServiceAccordion
+            title="Gemini（任意）"
+            badge={apiFields.geminiKey
+              ? <span className="text-xs text-emerald-400">✓ 設定済み</span>
+              : undefined}
+            defaultOpen={!apiFields.geminiKey}
+          >
+            <a
+              href="https://aistudio.google.com/app/apikey"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="self-end text-xs text-blue-400 hover:text-blue-300"
+            >
+              → AI Studio で取得 ↗
+            </a>
             <input
               value={apiFields.geminiKey}
               onChange={(e) => setApiFields((p) => ({ ...p, geminiKey: e.target.value }))}
@@ -745,7 +833,7 @@ export default function SettingsPage() {
               placeholder="AIzaSy..."
             />
             <TestButton label="Gemini" onTest={testGemini} />
-          </div>
+          </ServiceAccordion>
 
           <motion.button
             whileTap={{ scale: 0.97 }}
@@ -793,39 +881,89 @@ export default function SettingsPage() {
       {/* GitHub Actions 生存維持 */}
       <AccordionSection title="⚙️ GitHub Actions 生存維持">
         <div className="flex flex-col gap-3">
+          {keepAliveConfirmed && (
+            <div className="flex items-center gap-2 rounded-xl bg-emerald-500/10 border border-emerald-500/20 px-3 py-2">
+              <span className="text-xs text-emerald-400 font-semibold">✓ 生存維持 有効</span>
+            </div>
+          )}
           <p className="text-xs text-muted-foreground leading-relaxed">
             Supabase 無料プランの自動停止を防ぐため、GitHub Actions テンプレートを設定してください。
           </p>
-          <div>
-            <p className="text-xs text-muted-foreground mb-1">SUPABASE_URL</p>
-            <div className="flex items-center gap-2">
-              <code className="flex-1 text-xs bg-background border border-white/10 rounded-lg px-3 py-2
-                text-foreground truncate">
-                {bundle.supabase.url || '（未設定）'}
-              </code>
-              <button
-                onClick={() => copyToClipboard(bundle.supabase.url, 'SUPABASE_URL')}
-                className="text-xs px-2 py-1.5 rounded-lg bg-white/5 border border-white/10 text-muted-foreground"
-              >
-                コピー
-              </button>
-            </div>
+
+          {/* 手順 1 */}
+          <div className="flex flex-col gap-1.5">
+            <p className="text-xs text-muted-foreground font-medium">① テンプレートをコピー</p>
+            <a
+              href="https://github.com/ambeyasuo-hash/Ambe_B_C"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center justify-center gap-1.5 py-2 rounded-xl border border-white/20
+                text-foreground text-xs font-medium hover:bg-white/5 transition-colors"
+            >
+              Use this template ↗
+            </a>
           </div>
-          <div>
-            <p className="text-xs text-muted-foreground mb-1">SUPABASE_ANON_KEY</p>
-            <div className="flex items-center gap-2">
-              <code className="flex-1 text-xs bg-background border border-white/10 rounded-lg px-3 py-2
-                text-muted-foreground truncate">
-                {bundle.supabase.anon_key ? `${bundle.supabase.anon_key.slice(0, 20)}...` : '（未設定）'}
-              </code>
-              <button
-                onClick={() => copyToClipboard(bundle.supabase.anon_key, 'SUPABASE_ANON_KEY')}
-                className="text-xs px-2 py-1.5 rounded-lg bg-white/5 border border-white/10 text-muted-foreground"
-              >
-                コピー
-              </button>
+
+          {/* 手順 2 */}
+          <div className="flex flex-col gap-1.5">
+            <p className="text-xs text-muted-foreground font-medium">② Secrets に登録する値</p>
+            <div>
+              <p className="text-xs text-muted-foreground mb-1">SUPABASE_URL</p>
+              <div className="flex items-center gap-2">
+                <code className="flex-1 text-xs bg-background border border-white/10 rounded-lg px-3 py-2
+                  text-foreground truncate">
+                  {bundle.supabase.url || '（未設定）'}
+                </code>
+                <button
+                  onClick={() => copyToClipboard(bundle.supabase.url, 'SUPABASE_URL')}
+                  className="text-xs px-2 py-1.5 rounded-lg bg-white/5 border border-white/10 text-muted-foreground"
+                >
+                  コピー
+                </button>
+              </div>
             </div>
+            <div>
+              <p className="text-xs text-muted-foreground mb-1">SUPABASE_ANON_KEY</p>
+              <div className="flex items-center gap-2">
+                <code className="flex-1 text-xs bg-background border border-white/10 rounded-lg px-3 py-2
+                  text-muted-foreground truncate">
+                  {bundle.supabase.anon_key ? `${bundle.supabase.anon_key.slice(0, 20)}...` : '（未設定）'}
+                </code>
+                <button
+                  onClick={() => copyToClipboard(bundle.supabase.anon_key, 'SUPABASE_ANON_KEY')}
+                  className="text-xs px-2 py-1.5 rounded-lg bg-white/5 border border-white/10 text-muted-foreground"
+                >
+                  コピー
+                </button>
+              </div>
+            </div>
+            <a
+              href="https://github.com/ambeyasuo-hash/Ambe_B_C/settings/secrets/actions"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="self-start text-xs text-blue-400 hover:text-blue-300"
+            >
+              → GitHub Secrets 設定ページを開く ↗
+            </a>
           </div>
+
+          {/* 手順 3: 疎通テスト */}
+          <div className="flex flex-col gap-1.5">
+            <p className="text-xs text-muted-foreground font-medium">③ 疎通テスト</p>
+            <TestButton label="Supabase 疎通テスト" onTest={testSupabase} />
+          </div>
+
+          {/* 設定済み確認 */}
+          <label className="flex items-center gap-3 cursor-pointer rounded-xl border border-white/10 px-3 py-2.5">
+            <input
+              type="checkbox"
+              checked={keepAliveConfirmed}
+              onChange={(e) => handleKeepAliveConfirm(e.target.checked)}
+              className="rounded"
+            />
+            <span className="text-xs text-foreground">設定が完了しました（生存維持 有効にする）</span>
+          </label>
+
           {copyMsg && <p className="text-xs text-emerald-400">{copyMsg}</p>}
         </div>
       </AccordionSection>
@@ -839,18 +977,51 @@ export default function SettingsPage() {
             </p>
           </div>
 
+          {/* 24単語バックアップ 3導線 */}
           <div className="flex flex-col gap-2">
             <p className="text-xs text-amber-400 font-medium">24単語バックアップ</p>
-            <p className="text-xs text-muted-foreground leading-relaxed">
-              セキュリティセットアップ時に表示された24単語がバックアップフレーズです。安全な場所に記録しておいてください。
-            </p>
-            <button
-              onClick={() => router.push('/lock?mode=recovery')}
-              className="w-full py-2 rounded-xl border border-amber-500/30 text-amber-400 text-xs
-                hover:bg-amber-500/10 transition-colors"
-            >
-              リカバリフレーズを確認する →
-            </button>
+            {mnemonicWords ? (
+              <>
+                <p className="text-xs text-muted-foreground leading-relaxed">
+                  セットアップ時の24単語を各導線で保管してください。
+                </p>
+                <div className="flex flex-col gap-2">
+                  <motion.button
+                    whileTap={{ scale: 0.97 }}
+                    onClick={handleCopyMnemonic}
+                    className="w-full py-2 rounded-xl border border-amber-500/30 text-amber-400 text-xs
+                      hover:bg-amber-500/10 transition-colors"
+                  >
+                    📋 コピー
+                  </motion.button>
+                  <motion.button
+                    whileTap={{ scale: 0.97 }}
+                    onClick={handleVcfExport}
+                    className="w-full py-2 rounded-xl border border-amber-500/30 text-amber-400 text-xs
+                      hover:bg-amber-500/10 transition-colors"
+                  >
+                    👤 .vcf エクスポート（連絡先に保存）
+                  </motion.button>
+                  <a
+                    href={`mailto:?subject=${encodeURIComponent('【バックアップ】あんべの名刺代わり・復号キー')}&body=${encodeURIComponent(mnemonicWords)}`}
+                    className="w-full py-2 rounded-xl border border-amber-500/30 text-amber-400 text-xs
+                      text-center hover:bg-amber-500/10 transition-colors block"
+                  >
+                    ✉️ メールで送信
+                  </a>
+                </div>
+              </>
+            ) : (
+              <div className="rounded-xl bg-amber-500/5 border border-amber-500/20 px-3 py-3">
+                <p className="text-xs text-muted-foreground leading-relaxed">
+                  セットアップ時に記録した24単語を使用してください。
+                </p>
+                <p className="text-xs text-amber-300/60 mt-1 leading-relaxed">
+                  24単語はセットアップ画面にのみ表示されます。この画面での再表示はできません。
+                </p>
+              </div>
+            )}
+            {copyMsg && <p className="text-xs text-emerald-400">{copyMsg}</p>}
           </div>
 
           <div className="flex flex-col gap-2 border-t border-amber-500/20 pt-3">
