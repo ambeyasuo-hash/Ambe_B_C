@@ -2,7 +2,8 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { fromB64, deriveWrappingKeyFromPIN, randomBytes, wrapKey } from '@/lib/crypto'
+import { createClient } from '@supabase/supabase-js'
+import { fromB64, deriveWrappingKeyFromPIN, randomBytes } from '@/lib/crypto'
 import {
   saveBundleWithPIN,
   saveBundleWithAlpha,
@@ -16,11 +17,12 @@ type ImportStep = 'scan' | 'pin' | 'done'
 interface QrPayload {
   v: number
   kind: string
-  ct: string
-  iv: string
+  token: string
   salt: string
-  iter: number
-  expiresAt?: string
+  iv: string
+  url: string
+  key: string
+  exp: string
 }
 
 interface QRPairingImportProps {
@@ -61,7 +63,7 @@ export default function QRPairingImport({ onClose }: QRPairingImportProps) {
           if (result) {
             try {
               const parsed = JSON.parse(result.getText()) as QrPayload
-              if (parsed.v === 1 && parsed.kind === 'config-bundle') {
+              if (parsed.v === 2 && parsed.kind === 'qr-relay') {
                 stopCamera()
                 setPayload(parsed)
                 setStep('pin')
@@ -105,29 +107,54 @@ export default function QRPairingImport({ onClose }: QRPairingImportProps) {
     setLoading(true)
     setError('')
     try {
+      // [1] 期限チェック
+      if (new Date(payload.exp) < new Date()) {
+        setError('QRコードが期限切れです')
+        return
+      }
+
+      // [3] Supabase 接続
+      const supabase = createClient(payload.url, payload.key)
+
+      // [4] ct を取得
+      const { data, error: fetchError } = await supabase
+        .from('qr_transfers')
+        .select('ct')
+        .eq('token', payload.token)
+        .single()
+
+      if (fetchError || !data) {
+        setError('QRコードは無効または既に使用済みです')
+        return
+      }
+
+      // [5] salt・iv をデコード
       const saltBytes = fromB64(payload.salt)
       const ivBytes = fromB64(payload.iv)
-      const ctBytes = fromB64(payload.ct)
+      const ctBytes = fromB64(data.ct as string)
 
+      // [6] wrapping key を導出
       const wrappingKey = await deriveWrappingKeyFromPIN(pin, saltBytes)
+
+      // [7] 復号
       const plainBuf = await crypto.subtle.decrypt(
         { name: 'AES-GCM', iv: ivBytes },
         wrappingKey,
         ctBytes,
       )
+
+      // [8] ConfigBundle をパース
       const bundle = JSON.parse(new TextDecoder().decode(plainBuf)) as ConfigBundle
 
-      // 新しいPINでbundleをローカルに保存し、WebAuthn alphaキーはPINキーで代替
+      // [9] cleanup: qr_transfers から削除
+      await supabase.from('qr_transfers').delete().eq('token', payload.token)
+
+      // [10] ローカルに保存して unlock
       const newPinSalt = randomBytes(16)
       const newPinKey = await deriveWrappingKeyFromPIN(pin, newPinSalt)
-
-      // wrapped_data_key_pin が bundle にある場合は再ラップ
-      // ない場合はそのまま引き継ぎ
       await saveBundleWithPIN(pin, bundle, newPinSalt)
-      // alpha = pin key で代替（次回 PRF 登録時にアップグレードされる）
       await saveBundleWithAlpha(newPinKey, bundle)
 
-      // bundleからdataKeyをアンラップしてunlock
       const { deriveWrappingKeyFromPIN: derivePIN, unwrapKey } = await import('@/lib/crypto')
       const saltHex = bundle.pin_salt
       if (saltHex) {
@@ -142,11 +169,10 @@ export default function QRPairingImport({ onClose }: QRPairingImportProps) {
           setTimeout(() => router.replace('/'), 300)
           return
         } catch {
-          // fall through to try with new pin key
+          // fall through
         }
       }
 
-      // wrapped_data_key_pinをnewPinKeyで取得できない場合はbundleをそのまま保存して/lockへ
       setStep('done')
       setTimeout(() => router.replace('/'), 300)
     } catch (e) {

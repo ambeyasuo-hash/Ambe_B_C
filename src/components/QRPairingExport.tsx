@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { QRCodeSVG } from 'qrcode.react'
 import { motion } from 'framer-motion'
+import { createClient } from '@supabase/supabase-js'
 import { randomBytes, deriveWrappingKeyFromPIN, toB64 } from '@/lib/crypto'
 import type { ConfigBundle } from '@/lib/config-bundle'
 
@@ -26,6 +27,7 @@ export default function QRPairingExport({ bundle, onClose }: QRPairingExportProp
   const [remaining, setRemaining] = useState(EXPIRE_SECONDS)
   const [expired, setExpired] = useState(false)
   const [error, setError] = useState('')
+  const [insertedToken, setInsertedToken] = useState<string | null>(null)
 
   const buildQrPayload = useCallback(async () => {
     try {
@@ -36,14 +38,35 @@ export default function QRPairingExport({ bundle, onClose }: QRPairingExportProp
       const plaintext = new TextEncoder().encode(JSON.stringify(bundle))
       const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, wrappingKey, plaintext)
 
+      const token = crypto.randomUUID()
+      const expiresAt = new Date(Date.now() + EXPIRE_SECONDS * 1000)
+
+      const supabase = createClient(bundle.supabase.url, bundle.supabase.anon_key)
+      const { error: insertError } = await supabase
+        .from('qr_transfers')
+        .insert({
+          token,
+          ct: toB64(ct),
+          iv: toB64(iv.buffer),
+          expires_at: expiresAt.toISOString(),
+        })
+
+      if (insertError) {
+        setError('サーバーへの保存に失敗しました: ' + insertError.message)
+        return
+      }
+
+      setInsertedToken(token)
+
       const payload = {
-        v: 1,
-        kind: 'config-bundle',
-        ct: toB64(ct),
-        iv: toB64(iv.buffer),
+        v: 2,
+        kind: 'qr-relay',
+        token,
         salt: toB64(salt.buffer),
-        iter: 100_000,
-        expiresAt: new Date(Date.now() + EXPIRE_SECONDS * 1000).toISOString(),
+        iv: toB64(iv.buffer),
+        url: bundle.supabase.url,
+        key: bundle.supabase.anon_key,
+        exp: expiresAt.toISOString(),
       }
       setQrData(JSON.stringify(payload))
     } catch (e) {
@@ -71,6 +94,12 @@ export default function QRPairingExport({ bundle, onClose }: QRPairingExportProp
     return () => clearInterval(id)
   }, [expired])
 
+  useEffect(() => {
+    if (!expired || !insertedToken) return
+    const supabase = createClient(bundle.supabase.url, bundle.supabase.anon_key)
+    supabase.from('qr_transfers').delete().eq('token', insertedToken)
+  }, [expired, insertedToken, bundle.supabase.url, bundle.supabase.anon_key])
+
   const mm = String(Math.floor(remaining / 60)).padStart(2, '0')
   const ss = String(remaining % 60).padStart(2, '0')
   const pinDigits = pin.split('')
@@ -97,7 +126,7 @@ export default function QRPairingExport({ bundle, onClose }: QRPairingExportProp
               </p>
             </div>
           ) : qrData ? (
-            <QRCodeSVG value={qrData} size={240} level="M" />
+            <QRCodeSVG value={qrData} size={240} level="L" />
           ) : error ? (
             <div className="w-[240px] h-[240px] flex items-center justify-center">
               <p className="text-xs text-center" style={{ color: 'oklch(0.577 0.245 27.325)' }}>{error}</p>

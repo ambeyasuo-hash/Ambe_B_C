@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS user_vault (
   user_email             TEXT NOT NULL UNIQUE,
   encryption_salt        TEXT NOT NULL UNIQUE,
   wrapped_data_key_alpha TEXT NOT NULL,
+  wrapped_data_key_pin   TEXT NOT NULL,
   wrapped_data_key_beta  TEXT NOT NULL,
   vault_generation       INTEGER NOT NULL DEFAULT 1,
   created_at             TIMESTAMPTZ DEFAULT now(),
@@ -87,7 +88,20 @@ GRANT ALL ON categories TO anon;
 
 CREATE INDEX IF NOT EXISTS idx_categories_encryption_salt ON categories (encryption_salt);
 
--- ④ updated_at 自動更新トリガー
+-- ④ qr_transfers テーブル（QR ペアリング一時保管・5分失効）
+CREATE TABLE IF NOT EXISTS qr_transfers (
+  token      TEXT PRIMARY KEY,
+  ct         TEXT NOT NULL,
+  iv         TEXT NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+ALTER TABLE qr_transfers ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "anon full access" ON qr_transfers
+  FOR ALL TO anon USING (true) WITH CHECK (true);
+GRANT ALL ON qr_transfers TO anon;
+
+-- ⑤ updated_at 自動更新トリガー
 CREATE OR REPLACE FUNCTION update_updated_at()
 RETURNS TRIGGER AS $$
 BEGIN
