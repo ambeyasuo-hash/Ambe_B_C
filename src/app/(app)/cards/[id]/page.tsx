@@ -82,7 +82,7 @@ export default function CardDetailPage() {
 
   const [isEditing, setIsEditing] = useState(false)
   const [editFields, setEditFields] = useState<PiiFields & { notes: string }>({
-    name: '', company: '', title: '', email: '', tel: '', address: '', notes: '',
+    name: '', furigana: '', company: '', title: '', email: '', tel: '', address: '', notes: '',
   })
   const [isSaving, setIsSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
