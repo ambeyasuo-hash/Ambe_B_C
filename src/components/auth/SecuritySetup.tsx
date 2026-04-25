@@ -42,6 +42,7 @@ export default function SecuritySetup() {
   const [error, setError] = useState('')
   const [testStatus, setTestStatus] = useState<Record<string, 'idle' | 'testing' | 'ok' | 'fail'>>({})
   const [pendingDataKey, setPendingDataKey] = useState<CryptoKey | null>(null)
+  const [sqlCopied, setSqlCopied] = useState(false)
 
   // ── Step 1: Register biometric ──────────────────────────────────────────
 
@@ -354,11 +355,25 @@ export default function SecuritySetup() {
                 </p>
                 <div className="flex gap-2">
                   <button
-                    onClick={() => navigator.clipboard.writeText(SUPABASE_SETUP_SQL)}
+                    onClick={async () => {
+                      try {
+                        await navigator.clipboard.writeText(SUPABASE_SETUP_SQL)
+                      } catch {
+                        const el = document.createElement('textarea')
+                        el.value = SUPABASE_SETUP_SQL
+                        el.style.cssText = 'position:fixed;opacity:0;top:0;left:0'
+                        document.body.appendChild(el)
+                        el.focus(); el.select()
+                        try { document.execCommand('copy') } catch { /* ignore */ }
+                        document.body.removeChild(el)
+                      }
+                      setSqlCopied(true)
+                      setTimeout(() => setSqlCopied(false), 2000)
+                    }}
                     className="flex-1 py-2 rounded-xl text-sm font-semibold"
                     style={{ background: 'var(--muted)', color: 'var(--foreground)' }}
                   >
-                    SQL をコピー
+                    {sqlCopied ? '✓ コピーしました' : 'SQL をコピー'}
                   </button>
                   <a
                     href="https://supabase.com/dashboard/project/_/sql/new"

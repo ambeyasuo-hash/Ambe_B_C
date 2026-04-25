@@ -465,7 +465,17 @@ export default function SettingsPage() {
   }, [])
 
   const handleCopySql = useCallback(async () => {
-    await navigator.clipboard.writeText(SUPABASE_SETUP_SQL)
+    try {
+      await navigator.clipboard.writeText(SUPABASE_SETUP_SQL)
+    } catch {
+      const el = document.createElement('textarea')
+      el.value = SUPABASE_SETUP_SQL
+      el.style.cssText = 'position:fixed;opacity:0;top:0;left:0'
+      document.body.appendChild(el)
+      el.focus(); el.select()
+      try { document.execCommand('copy') } catch { /* ignore */ }
+      document.body.removeChild(el)
+    }
     setSqlCopied(true)
     setTimeout(() => setSqlCopied(false), 2000)
   }, [])
