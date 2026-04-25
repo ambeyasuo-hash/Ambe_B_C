@@ -3,10 +3,9 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { createClient } from '@supabase/supabase-js'
-import { fromB64, deriveWrappingKeyFromPIN, randomBytes } from '@/lib/crypto'
+import { fromB64, deriveWrappingKeyFromPIN, randomBytes, unwrapKey, wrapKey } from '@/lib/crypto'
 import {
   saveBundleWithPIN,
-  saveBundleWithAlpha,
   type ConfigBundle,
 } from '@/lib/config-bundle'
 import { useVault } from '@/context/VaultContext'
@@ -149,30 +148,30 @@ export default function QRPairingImport({ onClose }: QRPairingImportProps) {
       // [9] cleanup: qr_transfers から削除
       await supabase.from('qr_transfers').delete().eq('token', payload.token)
 
-      // [10] ローカルに保存して unlock
-      const newPinSalt = randomBytes(16)
-      const newPinKey = await deriveWrappingKeyFromPIN(pin, newPinSalt)
-      await saveBundleWithPIN(pin, bundle, newPinSalt)
-      await saveBundleWithAlpha(newPinKey, bundle)
-
-      const { deriveWrappingKeyFromPIN: derivePIN, unwrapKey } = await import('@/lib/crypto')
-      const saltHex = bundle.pin_salt
-      if (saltHex) {
-        const existingSalt = Uint8Array.from(
-          saltHex.match(/.{2}/g)!.map((h) => parseInt(h, 16)),
-        ) as Uint8Array<ArrayBuffer>
-        const existingPinKey = await derivePIN(pin, existingSalt)
-        try {
-          const dataKey = await unwrapKey(existingPinKey, bundle.wrapped_data_key_pin)
-          unlock(dataKey, bundle)
-          setStep('done')
-          setTimeout(() => router.replace('/'), 300)
-          return
-        } catch {
-          // fall through
-        }
+      // [10] 元の pin_salt で dataKey を解包し、新 salt で再ラップして保存
+      if (!bundle.pin_salt || !bundle.wrapped_data_key_pin) {
+        setError('転送データに PIN 鍵情報が含まれていません。元端末で再度セットアップしてください。')
+        return
       }
 
+      const existingSalt = Uint8Array.from(
+        bundle.pin_salt.match(/.{2}/g)!.map((h: string) => parseInt(h, 16)),
+      )
+      const existingPinKey = await deriveWrappingKeyFromPIN(pin, existingSalt)
+      const dataKey = await unwrapKey(existingPinKey, bundle.wrapped_data_key_pin)
+
+      // この端末用の新しい salt で dataKey を再ラップ
+      const newPinSalt = randomBytes(16)
+      const newPinKey = await deriveWrappingKeyFromPIN(pin, newPinSalt)
+      const newWrappedDataKeyPin = await wrapKey(newPinKey, dataKey)
+
+      // wrapped_data_key_pin を新 salt 対応に更新した bundle を保存
+      const updatedBundle: ConfigBundle = { ...bundle, wrapped_data_key_pin: newWrappedDataKeyPin }
+      await saveBundleWithPIN(pin, updatedBundle, newPinSalt)
+
+      // ※ saveBundleWithAlpha は呼ばない。WebAuthn PRF 鍵はこの端末未登録のため。
+      //    次回生体認証時に LockScreen の PRF upgrade フローが自動処理する。
+      unlock(dataKey, updatedBundle)
       setStep('done')
       setTimeout(() => router.replace('/'), 300)
     } catch (e) {
