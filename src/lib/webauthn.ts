@@ -91,6 +91,10 @@ export async function assertWebAuthn(): Promise<AssertResult> {
   // transports 未保存 or 空の場合は 'internal' に固定する。
   // 未指定のままにすると Chrome が Windows Hello + GPM を同時表示する既知の挙動がある。
   // 本アプリは常に authenticatorAttachment: 'platform' で登録するため 'internal' が正しい。
+  // Chrome on Windows では Windows Hello と Google Password Manager が
+  // どちらも transports: ['internal'] として認識されるため、
+  // transports だけでは両者を区別できない。
+  // hints: ['client-device'] を併用して GPM の重複表示を抑制する。
   const transports: AuthenticatorTransport[] =
     parsedTransports.length > 0 ? parsedTransports : ['internal']
 
@@ -101,17 +105,23 @@ export async function assertWebAuthn(): Promise<AssertResult> {
   }
 
   const assertion = await navigator.credentials.get({
+    mediation: 'optional',
     publicKey: {
       challenge,
       allowCredentials: [allowCredential],
       userVerification: 'required',
       timeout: 60_000,
+      // hints: ['client-device'] はデバイス内蔵の認証器（Windows Hello / TouchID）を
+      // 優先し、クラウド同期キー（Google Password Manager 等）のポップアップを抑制する。
+      // WebAuthn Level 3 / Chrome 118+ で有効。
+      // TypeScript の型定義が未対応のため as any で追記する。
+      ...({ hints: ['client-device'] } as Record<string, unknown>),
       ...(getRpId() ? { rpId: getRpId() } : {}),
       ...(prfEnabled
         ? { extensions: { prf: { eval: { first: PRF_SALT } } } }
         : {}),
     },
-  }) as PublicKeyCredential | null
+  } as CredentialRequestOptions) as PublicKeyCredential | null
 
   if (!assertion) throw new Error('WebAuthn 認証がキャンセルされました')
 
