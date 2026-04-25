@@ -9,6 +9,7 @@ export const SUPABASE_FORMAT_SQL = `-- =========================================
 -- ============================================================
 
 -- テーブルを CASCADE で削除（トリガーも一緒に削除される）
+DROP TABLE IF EXISTS qr_transfers   CASCADE;
 DROP TABLE IF EXISTS categories     CASCADE;
 DROP TABLE IF EXISTS business_cards CASCADE;
 DROP TABLE IF EXISTS user_vault     CASCADE;

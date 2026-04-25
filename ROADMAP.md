@@ -2,8 +2,8 @@
 # Phoenix Rebuild Edition
 
 **作成日**: 2026-04-21  
-**更新日**: 2026-04-24  
-**ベース仕様**: design_doc_v6_0_3.md / CLAUDE.md v6.0.0  
+**更新日**: 2026-04-25  
+**ベース仕様**: design_doc_v6_1.md / CLAUDE.md v6.0.0  
 **対応モックアップ**: mockup_v6_8.html（①〜⑲ 全20画面）
 
 ---
@@ -121,7 +121,10 @@
         ★ Step 2 終了時に Vault 存在確認チェックを必須実装（design_doc 3.1 [1.5]）
         ★ 既存 Vault 検出時は fresh setup をブロックしインポートフローへ誘導
 [3-7] src/components/auth/LockScreen.tsx     — ロック画面 UI（①②）
-[3-8] src/lib/pairing.ts + PairingExport/Import.tsx  — QR ペアリング（⑪⑫）
+[3-8] src/components/QRPairingExport.tsx / QRPairingImport.tsx
+       — QR ペアリング Supabase リレー方式（⑪⑫）
+       ★ v6.1.0: QR ペイロードを〜170文字に削減（旧: 〜1,200バイト）
+       ★ 暗号文を qr_transfers テーブルに一時保管し 5 分で失効・自動 DELETE
 [3-9] src/lib/ambe-file.ts + AmbeExport/Import.tsx   — .ambe 経路（⑬⑭）
 [3-10] 緊急リカバリ UI（⑮⑯）— 24単語入力 + 完全全滅フロー
 [3-11] 15分セッションタイマー — 右上表示・自動ロック
@@ -252,7 +255,7 @@
 | インラインスタイルでカラーコード直書き | デザイントークン崩壊 |
 | `master_key` 呼称を使う | v6.0 は `Data Key` に統一 |
 | 旧 localStorage キーを参照 | `encryption_key_wrapped_b64` 等は廃止済み |
-| QR ペアリングに中継サーバー | BYOS と矛盾 |
+| QR ペアリングに**第三者**中継サーバー（開発者管理サーバー等） | BYOS と矛盾。ユーザー自身の Supabase をリレーに使う方式は v6.1.0 で許可 |
 | Config Bundle を localStorage に平文保存 | 必ず暗号化状態で保存 |
 | 暗号処理を Server Component で行う | `CryptoKey` はシリアライズ不可・Zero-Knowledge 違反。必ず `'use client'` の Context/Hooks 内で完結させる |
 | Vercel Cron / CRON_SECRET を使用する | v6.0.3 で廃止。GitHub Actions 直接 ping 方式に統一 |

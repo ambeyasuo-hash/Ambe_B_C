@@ -191,6 +191,7 @@ export default function SecuritySetup() {
         user_email: userEmail,
         encryption_salt: encSalt,
         wrapped_data_key_alpha: wrappedAlpha,
+        wrapped_data_key_pin: wrappedPin,
         wrapped_data_key_beta: wrappedBeta,
       })
 

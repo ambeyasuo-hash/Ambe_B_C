@@ -16,6 +16,7 @@ export interface VaultRow {
   user_email: string
   encryption_salt: string
   wrapped_data_key_alpha: string
+  wrapped_data_key_pin: string
   wrapped_data_key_beta: string
 }
 
@@ -43,6 +44,7 @@ export async function saveVaultRow(
       user_email: row.user_email,
       encryption_salt: row.encryption_salt,
       wrapped_data_key_alpha: row.wrapped_data_key_alpha,
+      wrapped_data_key_pin: row.wrapped_data_key_pin,
       wrapped_data_key_beta: row.wrapped_data_key_beta,
     },
     { onConflict: 'user_email' },
@@ -58,7 +60,7 @@ export async function fetchVaultRow(
   const sb = makeSupabaseClient(config.supabase.url, config.supabase.anon_key)
   const { data, error } = await sb
     .from('user_vault')
-    .select('encryption_salt, wrapped_data_key_alpha, wrapped_data_key_beta')
+    .select('encryption_salt, wrapped_data_key_alpha, wrapped_data_key_pin, wrapped_data_key_beta, user_email')
     .eq('encryption_salt', config.encryption_salt)
     .single()
   if (error) return null
