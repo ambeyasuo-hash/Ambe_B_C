@@ -8,17 +8,13 @@ export const SUPABASE_FORMAT_SQL = `-- =========================================
 -- Supabase Dashboard > SQL Editor に貼り付けて実行してください
 -- ============================================================
 
--- トリガー削除
-DROP TRIGGER IF EXISTS trg_business_cards_updated_at ON business_cards;
-DROP TRIGGER IF EXISTS trg_user_vault_updated_at     ON user_vault;
-
--- 関数削除
-DROP FUNCTION IF EXISTS update_updated_at() CASCADE;
-
--- テーブル削除（依存関係の逆順）
-DROP TABLE IF EXISTS categories    CASCADE;
+-- テーブルを CASCADE で削除（トリガーも一緒に削除される）
+DROP TABLE IF EXISTS categories     CASCADE;
 DROP TABLE IF EXISTS business_cards CASCADE;
-DROP TABLE IF EXISTS user_vault    CASCADE;
+DROP TABLE IF EXISTS user_vault     CASCADE;
+
+-- テーブル削除後に関数を削除
+DROP FUNCTION IF EXISTS update_updated_at() CASCADE;
 
 SELECT 'フォーマット完了。次にセットアップ SQL を実行してください。' AS status;`
 
@@ -86,7 +82,7 @@ CREATE TABLE IF NOT EXISTS categories (
 );
 ALTER TABLE categories ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "anon full access"       ON categories FOR ALL    TO anon USING (true) WITH CHECK (true);
-CREATE POLICY "protect system-default" ON categories FOR DELETE TO anon USING (id != 'system-default');
+CREATE POLICY "protect system-default" ON categories FOR DELETE TO anon USING (id::text != 'system-default');
 GRANT ALL ON categories TO anon;
 
 CREATE INDEX IF NOT EXISTS idx_categories_encryption_salt ON categories (encryption_salt);
