@@ -31,6 +31,7 @@ export function splitName(raw: string): { family: string; given: string } {
 export function buildSearchTokens(result: BusinessCardOcrResult): string[] {
   const sources = [
     result.name?.value,
+    result.furigana?.value,
     result.company?.value,
     result.title?.value,
     result.email?.value,

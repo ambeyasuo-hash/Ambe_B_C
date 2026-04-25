@@ -71,6 +71,7 @@ function detectNameIssue(name: string): NameIssue | null {
 
 interface EditFields {
   name: string
+  furigana: string
   company: string
   title: string
   email: string
@@ -81,6 +82,7 @@ interface EditFields {
 
 const FORM_FIELDS: Array<{ key: keyof Omit<EditFields, 'memo'>; label: string; type: string }> = [
   { key: 'name', label: '氏名', type: 'text' },
+  { key: 'furigana', label: 'フリガナ', type: 'text' },
   { key: 'company', label: '会社名', type: 'text' },
   { key: 'title', label: '役職', type: 'text' },
   { key: 'email', label: 'メール', type: 'email' },
@@ -170,7 +172,7 @@ export default function ScanPage() {
   const [backOcrResult, setBackOcrResult] = useState<{ rawText: string; confidence: number } | null>(null)
 
   const [editFields, setEditFields] = useState<EditFields>({
-    name: '', company: '', title: '', email: '', tel: '', address: '', memo: '',
+    name: '', furigana: '', company: '', title: '', email: '', tel: '', address: '', memo: '',
   })
 
   const [categories, setCategories] = useState<Category[]>([])
@@ -317,13 +319,14 @@ export default function ScanPage() {
         )
         setOcrResult(result)
         setEditFields({
-          name: result.name?.value ?? '',
-          company: result.company?.value ?? '',
-          title: result.title?.value ?? '',
-          email: result.email?.value ?? '',
-          tel: result.tel?.value ?? '',
-          address: result.address?.value ?? '',
-          memo: '',
+          name:     result.name?.value     ?? '',
+          furigana: result.furigana?.value ?? '',
+          company:  result.company?.value  ?? '',
+          title:    result.title?.value    ?? '',
+          email:    result.email?.value    ?? '',
+          tel:      result.tel?.value      ?? '',
+          address:  result.address?.value  ?? '',
+          memo:     '',
         })
         setShowBackPrompt(true)
         setStep('preview')
@@ -355,12 +358,13 @@ export default function ScanPage() {
     try {
       // [1] Encrypt PII JSON（位置情報も E2EE 対象として含める）
       const piiJson = JSON.stringify({
-        name: editFields.name,
-        company: editFields.company,
-        title: editFields.title,
-        email: editFields.email,
-        tel: editFields.tel,
-        address: editFields.address,
+        name:     editFields.name,
+        furigana: editFields.furigana,
+        company:  editFields.company,
+        title:    editFields.title,
+        email:    editFields.email,
+        tel:      editFields.tel,
+        address:  editFields.address,
         ...(scanLocation && {
           scanned_lat: scanLocation.lat,
           scanned_lng: scanLocation.lng,
@@ -623,9 +627,14 @@ export default function ScanPage() {
           {frontImageBase64 && (
             <div className="flex-1 flex flex-col gap-1">
               <p className="text-xs text-muted-foreground">表面</p>
-              <div className="relative rounded-xl overflow-hidden aspect-video bg-card border border-white/10">
+              <div className="relative rounded-xl overflow-hidden bg-card border border-white/10">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={frontImageBase64} alt="名刺表面" className="w-full h-full object-cover" />
+                <img
+                  src={frontImageBase64}
+                  alt="名刺表面"
+                  className="w-full h-auto block"
+                  style={{ maxHeight: '200px', objectFit: 'contain' }}
+                />
                 <button
                   onClick={() => {
                     setFrontImageBase64(null)
@@ -645,9 +654,14 @@ export default function ScanPage() {
           {backImageBase64 && (
             <div className="flex-1 flex flex-col gap-1">
               <p className="text-xs text-muted-foreground">裏面</p>
-              <div className="relative rounded-xl overflow-hidden aspect-video bg-card border border-white/10">
+              <div className="relative rounded-xl overflow-hidden bg-card border border-white/10">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={backImageBase64} alt="名刺裏面" className="w-full h-full object-cover" />
+                <img
+                  src={backImageBase64}
+                  alt="名刺裏面"
+                  className="w-full h-auto block"
+                  style={{ maxHeight: '200px', objectFit: 'contain' }}
+                />
                 <button
                   onClick={() => {
                     setBackImageBase64(null)
@@ -665,6 +679,16 @@ export default function ScanPage() {
             </div>
           )}
         </div>
+
+        {/* 位置情報インジケーター */}
+        {scanLocation && (
+          <div className="flex items-center gap-1.5 px-1">
+            <span className="text-xs">📍</span>
+            <span className="text-xs text-muted-foreground">
+              位置情報を取得済み（精度 ±{Math.round(scanLocation.accuracy)}m）
+            </span>
+          </div>
+        )}
 
         {/* Scan back prompt */}
         {!backImageBase64 && showBackPrompt && (

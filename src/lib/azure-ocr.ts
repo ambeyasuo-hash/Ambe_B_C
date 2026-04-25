@@ -7,6 +7,7 @@ export interface OcrField {
 
 export interface BusinessCardOcrResult {
   name?: OcrField
+  furigana?: OcrField
   company?: OcrField
   title?: OcrField
   email?: OcrField
@@ -357,6 +358,21 @@ function parseRawTextFallback(rawText: string): Partial<BusinessCardOcrResult> {
     }
   }
 
+  // ── Furigana（フリガナ）検出 ─────────────────────────────────────────────
+  // ひらがな・カタカナのみで構成される 2〜12 文字の行をフリガナ候補とする
+  // name が確定している場合のみ候補を採用する（誤検出を防ぐ）
+  if (!result.furigana && result.name) {
+    const FURIGANA_RE = /^[぀-ゟ゠-ヿ\s　・]{2,12}$/
+    for (let i = 0; i < lines.length; i++) {
+      if (used.has(i)) continue
+      if (FURIGANA_RE.test(lines[i])) {
+        result.furigana = { value: lines[i].trim(), confidence: 0.80 }
+        used.add(i)
+        break
+      }
+    }
+  }
+
   // ── Company フォールバック (キーワードなしの場合) ─────────────────────
   // 会社名キーワードが一切ない名刺向けに、未使用の長めの行を会社名候補とする
   if (!result.company) {
@@ -468,12 +484,13 @@ export async function analyzeBusinessCardFront(
     : (fallback.name ?? structured.name)
 
   return {
-    name:    mergedName,
-    company: structured.company ?? fallback.company,
-    title:   structured.title   ?? fallback.title,
-    email:   structured.email   ?? fallback.email,
-    tel:     structured.tel     ?? fallback.tel,
-    address: structured.address ?? fallback.address,
+    name:     mergedName,
+    furigana: fallback.furigana,
+    company:  structured.company ?? fallback.company,
+    title:    structured.title   ?? fallback.title,
+    email:    structured.email   ?? fallback.email,
+    tel:      structured.tel     ?? fallback.tel,
+    address:  structured.address ?? fallback.address,
     rawText,
     confidence: calcAvgConfidence(analyzeResult),
   }
