@@ -22,6 +22,7 @@ interface CardRow {
 
 interface PiiFields {
   name: string
+  furigana: string
   company: string
   title: string
   email: string
@@ -44,6 +45,7 @@ const GRADIENT_CLASSES = [
 
 const FIELD_LABELS: Array<{ key: keyof PiiFields; label: string; type: string }> = [
   { key: 'name', label: '氏名', type: 'text' },
+  { key: 'furigana', label: 'フリガナ', type: 'text' },
   { key: 'company', label: '会社名', type: 'text' },
   { key: 'title', label: '役職', type: 'text' },
   { key: 'email', label: 'メール', type: 'email' },
@@ -120,6 +122,7 @@ export default function CardDetailPage() {
       const rawPii = JSON.parse(piiJson) as Partial<PiiFields>
       const pii: PiiFields = {
         name: rawPii.name ?? '',
+        furigana: rawPii.furigana ?? '',
         company: rawPii.company ?? '',
         title: rawPii.title ?? '',
         email: rawPii.email ?? '',
@@ -163,6 +166,7 @@ export default function CardDetailPage() {
     try {
       const piiJson = JSON.stringify({
         name: editFields.name,
+        furigana: editFields.furigana,
         company: editFields.company,
         title: editFields.title,
         email: editFields.email,
@@ -199,7 +203,7 @@ export default function CardDetailPage() {
 
       setCard((prev) => prev ? {
         ...prev,
-        pii: { name: editFields.name, company: editFields.company, title: editFields.title, email: editFields.email, tel: editFields.tel, address: editFields.address },
+        pii: { name: editFields.name, furigana: editFields.furigana, company: editFields.company, title: editFields.title, email: editFields.email, tel: editFields.tel, address: editFields.address },
         row: { ...prev.row, notes: editFields.notes || null },
       } : null)
       setIsEditing(false)

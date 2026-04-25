@@ -29,6 +29,7 @@ export default function LockScreen({ initialMode }: { initialMode?: LockMode }) 
   const [error, setError] = useState('')
   const [recoveryExpanded, setRecoveryExpanded] = useState(false)
   const [canUseBiometric, setCanUseBiometric] = useState(false)
+  const [isUnlocking, setIsUnlocking] = useState(false)
   // PRF assertion 成功後、bundle が PIN 暗号化のままだった場合に upgrade するための key 保持
   const pendingPrfKey = useRef<CryptoKey | null>(null)
 
@@ -73,6 +74,13 @@ export default function LockScreen({ initialMode }: { initialMode?: LockMode }) 
     setRecoveryExpanded(false)
   }
 
+  function handleUnlockWithFadeout(dataKey: CryptoKey, bundle: ConfigBundle) {
+    setIsUnlocking(true)
+    setTimeout(() => {
+      unlock(dataKey, bundle)
+    }, 300)
+  }
+
   // ── Biometric unlock ───────────────────────────────────────────────────
 
   async function handleBiometric() {
@@ -96,7 +104,7 @@ export default function LockScreen({ initialMode }: { initialMode?: LockMode }) 
         try {
           const bundle = await loadBundleWithAlpha(result.wrappingKey)
           const dataKey = await unlockWithAlpha(result.wrappingKey, bundle)
-          unlock(dataKey, bundle)
+          handleUnlockWithFadeout(dataKey, bundle)
         } catch {
           // bundle がまだ PIN key で暗号化されている（初回 PRF ログイン）
           pendingPrfKey.current = result.wrappingKey
@@ -322,7 +330,11 @@ export default function LockScreen({ initialMode }: { initialMode?: LockMode }) 
   const inputStyle = { background: 'var(--input)', color: 'var(--foreground)', border: '1px solid var(--border)' }
 
   return (
-    <div className="flex flex-col flex-1 items-center justify-center px-8 gap-8"
+    <motion.div
+      initial={{ opacity: 1 }}
+      animate={{ opacity: isUnlocking ? 0 : 1 }}
+      transition={{ duration: 0.3 }}
+      className="flex flex-col flex-1 items-center justify-center px-8 gap-8"
       style={{ paddingTop: '59px', paddingBottom: '20px' }}>
 
       <div className="flex flex-col items-center gap-3">
@@ -620,6 +632,6 @@ export default function LockScreen({ initialMode }: { initialMode?: LockMode }) 
           </AnimatePresence>
         </div>
       )}
-    </div>
+    </motion.div>
   )
 }

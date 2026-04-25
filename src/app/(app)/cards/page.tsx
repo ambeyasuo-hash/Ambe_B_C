@@ -431,7 +431,7 @@ export default function CardsPage() {
               key={card.id}
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: i * 0.04 }}
+              transition={{ delay: i * 0.05 }}
               whileTap={{ scale: 0.98 }}
               onClick={() => router.push(`/cards/${card.id}`)}
               className="rounded-2xl bg-card border border-white/10 overflow-hidden flex gap-3 p-3 cursor-pointer"
