@@ -11,7 +11,11 @@ import {
 import { useVault } from '@/context/VaultContext'
 import { useRouter } from 'next/navigation'
 
-type ImportStep = 'scan' | 'pin' | 'done'
+// step 'pin'    : QR ペアリング PIN（PC 画面に表示されたランダム6桁）
+//                  → Supabase の暗号文を復号してバンドルを取得
+// step 'app-pin': アプリ PIN（元端末でセットアップ時に設定した本人のPIN）
+//                  → bundle.wrapped_data_key_pin を解包してデータキーを取得
+type ImportStep = 'scan' | 'pin' | 'app-pin' | 'done'
 
 interface QrPayload {
   v: number
@@ -35,7 +39,10 @@ export default function QRPairingImport({ onClose }: QRPairingImportProps) {
   const controlsRef = useRef<{ stop: () => void } | null>(null)
   const [step, setStep] = useState<ImportStep>('scan')
   const [payload, setPayload] = useState<QrPayload | null>(null)
-  const [pin, setPin] = useState('')
+  const [pin, setPin] = useState('')          // QR ペアリング PIN
+  const [appPin, setAppPin] = useState('')    // アプリ PIN（元端末のもの）
+  const [appPinError, setAppPinError] = useState('')
+  const [decryptedBundle, setDecryptedBundle] = useState<ConfigBundle | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [cameraError, setCameraError] = useState('')
@@ -101,6 +108,8 @@ export default function QRPairingImport({ onClose }: QRPairingImportProps) {
     }
   }, [stopCamera])
 
+  // ── Step 1: QR ペアリング PIN で Supabase から暗号文を取得・復号 ──────────
+
   async function handleDecrypt() {
     if (!payload || pin.length < 6) return
     setLoading(true)
@@ -112,10 +121,10 @@ export default function QRPairingImport({ onClose }: QRPairingImportProps) {
         return
       }
 
-      // [3] Supabase 接続
+      // [2] Supabase 接続
       const supabase = createClient(payload.url, payload.key)
 
-      // [4] ct を取得
+      // [3] ct を取得
       const { data, error: fetchError } = await supabase
         .from('qr_transfers')
         .select('ct')
@@ -127,57 +136,32 @@ export default function QRPairingImport({ onClose }: QRPairingImportProps) {
         return
       }
 
-      // [5] salt・iv をデコード
+      // [4] salt・iv・ct をデコード
       const saltBytes = fromB64(payload.salt)
-      const ivBytes = fromB64(payload.iv)
-      const ctBytes = fromB64(data.ct as string)
+      const ivBytes   = fromB64(payload.iv)
+      const ctBytes   = fromB64(data.ct as string)
 
-      // [6] wrapping key を導出
+      // [5] QR PIN で wrapping key を導出して復号
       const wrappingKey = await deriveWrappingKeyFromPIN(pin, saltBytes)
-
-      // [7] 復号
       const plainBuf = await crypto.subtle.decrypt(
         { name: 'AES-GCM', iv: ivBytes },
         wrappingKey,
         ctBytes,
       )
 
-      // [8] ConfigBundle をパース
+      // [6] ConfigBundle をパース
       const bundle = JSON.parse(new TextDecoder().decode(plainBuf)) as ConfigBundle
 
-      // [9] cleanup: qr_transfers から削除
+      // [7] cleanup: qr_transfers から削除
       await supabase.from('qr_transfers').delete().eq('token', payload.token)
 
-      // [10] 元の pin_salt で dataKey を解包し、新 salt で再ラップして保存
-      if (!bundle.pin_salt || !bundle.wrapped_data_key_pin) {
-        setError('転送データに PIN 鍵情報が含まれていません。元端末で再度セットアップしてください。')
-        return
-      }
-
-      const existingSalt = Uint8Array.from(
-        bundle.pin_salt.match(/.{2}/g)!.map((h: string) => parseInt(h, 16)),
-      )
-      const existingPinKey = await deriveWrappingKeyFromPIN(pin, existingSalt)
-      const dataKey = await unwrapKey(existingPinKey, bundle.wrapped_data_key_pin)
-
-      // この端末用の新しい salt で dataKey を再ラップ
-      const newPinSalt = randomBytes(16)
-      const newPinKey = await deriveWrappingKeyFromPIN(pin, newPinSalt)
-      const newWrappedDataKeyPin = await wrapKey(newPinKey, dataKey)
-
-      // wrapped_data_key_pin を新 salt 対応に更新した bundle を保存
-      const updatedBundle: ConfigBundle = { ...bundle, wrapped_data_key_pin: newWrappedDataKeyPin }
-      await saveBundleWithPIN(pin, updatedBundle, newPinSalt)
-
-      // ※ saveBundleWithAlpha は呼ばない。WebAuthn PRF 鍵はこの端末未登録のため。
-      //    次回生体認証時に LockScreen の PRF upgrade フローが自動処理する。
-      unlock(dataKey, updatedBundle)
-      setStep('done')
-      setTimeout(() => router.replace('/'), 300)
+      // [8] 次ステップへ（アプリ PIN でデータキーを解包するため bundle を保持）
+      setDecryptedBundle(bundle)
+      setStep('app-pin')
     } catch (e) {
       const msg = e instanceof Error ? e.message : ''
-      if (msg.includes('decrypt') || msg.includes('OperationError')) {
-        setError('PINが正しくありません')
+      if (msg.includes('decrypt') || msg.toLowerCase().includes('operationerror') || msg.includes('operation')) {
+        setError('QRのPINが正しくありません')
       } else {
         setError('復号に失敗しました: ' + (msg || '不明なエラー'))
       }
@@ -185,6 +169,53 @@ export default function QRPairingImport({ onClose }: QRPairingImportProps) {
     } finally {
       setLoading(false)
     }
+  }
+
+  // ── Step 2: アプリ PIN でデータキーを解包し、この端末用に再ラップ ──────────
+
+  async function handleAppPin() {
+    if (!decryptedBundle || appPin.length < 4) return
+    setLoading(true)
+    setAppPinError('')
+    try {
+      if (!decryptedBundle.pin_salt || !decryptedBundle.wrapped_data_key_pin) {
+        setAppPinError('転送データに PIN 鍵情報が含まれていません。元端末で再度セットアップしてください。')
+        return
+      }
+
+      // 元端末の pin_salt でキーを導出し、データキーを解包
+      const existingSalt = Uint8Array.from(
+        decryptedBundle.pin_salt.match(/.{2}/g)!.map((h: string) => parseInt(h, 16)),
+      )
+      const existingPinKey = await deriveWrappingKeyFromPIN(appPin, existingSalt)
+      const dataKey = await unwrapKey(existingPinKey, decryptedBundle.wrapped_data_key_pin)
+
+      // この端末用の新しい salt でデータキーを再ラップ
+      const newPinSalt = randomBytes(16)
+      const newPinKey = await deriveWrappingKeyFromPIN(appPin, newPinSalt)
+      const newWrappedDataKeyPin = await wrapKey(newPinKey, dataKey)
+
+      // wrapped_data_key_pin を更新した bundle を保存
+      const updatedBundle: ConfigBundle = { ...decryptedBundle, wrapped_data_key_pin: newWrappedDataKeyPin }
+      await saveBundleWithPIN(appPin, updatedBundle, newPinSalt)
+      // ※ saveBundleWithAlpha は呼ばない。WebAuthn PRF 鍵はこの端末未登録のため。
+      //    次回生体認証時に LockScreen の PRF upgrade フローが自動処理する。
+
+      unlock(dataKey, updatedBundle)
+      setStep('done')
+      setTimeout(() => router.replace('/'), 300)
+    } catch {
+      setAppPinError('アプリのPINが正しくありません')
+      setAppPin('')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // ── Render ─────────────────────────────────────────────────────────────────
+
+  const primaryBtn: React.CSSProperties = {
+    background: 'linear-gradient(135deg, oklch(0.55 0.22 255), oklch(0.60 0.18 200))',
   }
 
   return (
@@ -204,6 +235,8 @@ export default function QRPairingImport({ onClose }: QRPairingImportProps) {
       </div>
 
       <AnimatePresence mode="wait">
+
+        {/* ── QR スキャン ── */}
         {step === 'scan' && (
           <motion.div key="scan"
             initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
@@ -233,21 +266,22 @@ export default function QRPairingImport({ onClose }: QRPairingImportProps) {
           </motion.div>
         )}
 
+        {/* ── QR ペアリング PIN（PC 画面に表示されたランダム6桁）── */}
         {step === 'pin' && (
           <motion.div key="pin"
             initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
             className="flex flex-col gap-4 w-full">
             <div className="rounded-xl p-3 text-xs text-center"
               style={{ background: 'oklch(0.15 0.05 140)', border: '1px solid oklch(0.45 0.15 140)', color: 'var(--foreground)' }}>
-              ✓ QRコードを読み取りました
+              ✓ QRコードを読み取りました（1/2）
             </div>
             <p className="text-sm" style={{ color: 'var(--muted-foreground)' }}>
-              既存端末に表示されている6桁のPINを入力してください
+              既存端末の画面に表示されている<strong style={{ color: 'var(--foreground)' }}>6桁のQR PIN</strong>を入力してください
             </p>
             <input
               type="password"
               inputMode="numeric"
-              placeholder="6桁 PIN"
+              placeholder="6桁 QR PIN"
               value={pin}
               onChange={(e) => setPin(e.target.value.replace(/\D/g, '').slice(0, 6))}
               onKeyDown={(e) => e.key === 'Enter' && handleDecrypt()}
@@ -266,12 +300,9 @@ export default function QRPairingImport({ onClose }: QRPairingImportProps) {
               onClick={handleDecrypt}
               disabled={pin.length < 6 || loading}
               className="w-full py-4 rounded-2xl font-bold text-white"
-              style={{
-                background: 'linear-gradient(135deg, oklch(0.55 0.22 255), oklch(0.60 0.18 200))',
-                opacity: pin.length >= 6 && !loading ? 1 : 0.4,
-              }}
+              style={{ ...primaryBtn, opacity: pin.length >= 6 && !loading ? 1 : 0.4 }}
             >
-              {loading ? '復号中...' : '引き継ぐ'}
+              {loading ? '取得中...' : '次へ →'}
             </motion.button>
             {error && (
               <p className="text-sm text-center" style={{ color: 'oklch(0.577 0.245 27.325)' }}>{error}</p>
@@ -279,6 +310,51 @@ export default function QRPairingImport({ onClose }: QRPairingImportProps) {
           </motion.div>
         )}
 
+        {/* ── アプリ PIN（元端末でセットアップ時に設定した本人のPIN）── */}
+        {step === 'app-pin' && (
+          <motion.div key="app-pin"
+            initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
+            className="flex flex-col gap-4 w-full">
+            <div className="rounded-xl p-3 text-xs text-center"
+              style={{ background: 'oklch(0.15 0.05 140)', border: '1px solid oklch(0.45 0.15 140)', color: 'var(--foreground)' }}>
+              ✓ 接続情報を取得しました（2/2）
+            </div>
+            <p className="text-sm" style={{ color: 'var(--muted-foreground)' }}>
+              元端末でセットアップ時に設定した<strong style={{ color: 'var(--foreground)' }}>アプリのPIN</strong>を入力してください
+            </p>
+            <input
+              type="password"
+              inputMode="numeric"
+              placeholder="アプリの PIN"
+              value={appPin}
+              onChange={(e) => setAppPin(e.target.value.replace(/\D/g, '').slice(0, 8))}
+              onKeyDown={(e) => e.key === 'Enter' && handleAppPin()}
+              autoFocus
+              className="w-full px-4 py-4 rounded-xl text-center"
+              style={{
+                background: 'var(--input)',
+                color: 'var(--foreground)',
+                border: `1px solid ${appPinError ? 'oklch(0.577 0.245 27.325)' : 'var(--border)'}`,
+                fontSize: '28px',
+                letterSpacing: '0.5em',
+              }}
+            />
+            <motion.button
+              whileTap={{ scale: 0.97 }}
+              onClick={handleAppPin}
+              disabled={appPin.length < 4 || loading}
+              className="w-full py-4 rounded-2xl font-bold text-white"
+              style={{ ...primaryBtn, opacity: appPin.length >= 4 && !loading ? 1 : 0.4 }}
+            >
+              {loading ? '引き継ぎ中...' : '引き継ぐ'}
+            </motion.button>
+            {appPinError && (
+              <p className="text-sm text-center" style={{ color: 'oklch(0.577 0.245 27.325)' }}>{appPinError}</p>
+            )}
+          </motion.div>
+        )}
+
+        {/* ── 完了 ── */}
         {step === 'done' && (
           <motion.div key="done"
             initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }}
@@ -288,6 +364,7 @@ export default function QRPairingImport({ onClose }: QRPairingImportProps) {
             <p className="text-sm text-center" style={{ color: 'var(--muted-foreground)' }}>設定を転送しました</p>
           </motion.div>
         )}
+
       </AnimatePresence>
     </div>
   )
