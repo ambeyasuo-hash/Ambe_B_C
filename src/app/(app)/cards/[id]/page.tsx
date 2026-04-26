@@ -35,6 +35,7 @@ interface ScanLocation {
   lat: number
   lng: number
   accuracy: number
+  name: string | null
 }
 
 interface CardState {
@@ -90,8 +91,8 @@ export default function CardDetailPage() {
   const [error, setError] = useState<string | null>(null)
 
   const [isEditing, setIsEditing] = useState(false)
-  const [editFields, setEditFields] = useState<PiiFields & { notes: string }>({
-    name: '', furigana: '', company: '', title: '', email: '', tel: '', mobile: '', address: '', notes: '',
+  const [editFields, setEditFields] = useState<PiiFields & { notes: string; locationName: string }>({
+    name: '', furigana: '', company: '', title: '', email: '', tel: '', mobile: '', address: '', notes: '', locationName: '',
   })
   const [isSaving, setIsSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
@@ -129,7 +130,7 @@ export default function CardDetailPage() {
       const row = data as CardRow
       const piiJson = await aesDecryptString(dataKey, row.encrypted_data)
       const rawPii = JSON.parse(piiJson) as Partial<PiiFields & {
-        scanned_lat: number; scanned_lng: number; scanned_accuracy: number
+        scanned_lat: number; scanned_lng: number; scanned_accuracy: number; scanned_location_name: string
       }>
       const pii: PiiFields = {
         name: rawPii.name ?? '',
@@ -145,6 +146,7 @@ export default function CardDetailPage() {
         lat: rawPii.scanned_lat,
         lng: rawPii.scanned_lng!,
         accuracy: rawPii.scanned_accuracy ?? 0,
+        name: rawPii.scanned_location_name ?? null,
       } : null
 
       let thumbnailFrontUrl: string | null = null
@@ -157,7 +159,7 @@ export default function CardDetailPage() {
       }
 
       setCard({ row, pii, thumbnailFrontUrl, thumbnailBackUrl, scanLocation })
-      setEditFields({ ...pii, notes: row.notes ?? '' })
+      setEditFields({ ...pii, notes: row.notes ?? '', locationName: scanLocation?.name ?? '' })
     } catch (e) {
       setError(e instanceof Error ? e.message : '名刺の読み込みに失敗しました')
     } finally {
@@ -190,11 +192,11 @@ export default function CardDetailPage() {
         tel: editFields.tel,
         mobile: editFields.mobile,
         address: editFields.address,
-        // 位置情報は編集対象外のため元のデータを保持する
         ...(card.scanLocation && {
           scanned_lat: card.scanLocation.lat,
           scanned_lng: card.scanLocation.lng,
           scanned_accuracy: card.scanLocation.accuracy,
+          ...(editFields.locationName && { scanned_location_name: editFields.locationName }),
         }),
       })
       const encryptedData = await aesEncryptString(dataKey, piiJson)
@@ -229,6 +231,7 @@ export default function CardDetailPage() {
         ...prev,
         pii: { name: editFields.name, furigana: editFields.furigana, company: editFields.company, title: editFields.title, email: editFields.email, tel: editFields.tel, mobile: editFields.mobile, address: editFields.address },
         row: { ...prev.row, notes: editFields.notes || null },
+        scanLocation: prev.scanLocation ? { ...prev.scanLocation, name: editFields.locationName || null } : null,
       } : null)
       setIsEditing(false)
       setToastMsg('保存しました')
@@ -422,6 +425,27 @@ export default function CardDetailPage() {
                     text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-blue-500 resize-none"
                 />
               </div>
+              {card.scanLocation && (
+                <div className="border-t border-white/5 pt-3">
+                  <label className="text-xs text-muted-foreground">初回名刺交換場所</label>
+                  <input
+                    type="text"
+                    value={editFields.locationName}
+                    onChange={(e) => setEditFields((prev) => ({ ...prev, locationName: e.target.value }))}
+                    placeholder="場所名（任意）"
+                    className="mt-1 w-full rounded-xl bg-background border border-white/10 px-3 py-2
+                      text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  />
+                  <a
+                    href={`https://maps.google.com/?q=${card.scanLocation.lat},${card.scanLocation.lng}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs text-blue-400/70 mt-1 block"
+                  >
+                    📍 {card.scanLocation.lat.toFixed(5)}, {card.scanLocation.lng.toFixed(5)}
+                  </a>
+                </div>
+              )}
               {saveError && <p className="text-xs text-red-400">{saveError}</p>}
               <div className="flex gap-2">
                 <motion.button
@@ -434,7 +458,7 @@ export default function CardDetailPage() {
                   {isSaving ? '保存中...' : '保存'}
                 </motion.button>
                 <button
-                  onClick={() => { setIsEditing(false); setSaveError(null); setEditFields({ ...card.pii, notes: card.row.notes ?? '' }) }}
+                  onClick={() => { setIsEditing(false); setSaveError(null); setEditFields({ ...card.pii, notes: card.row.notes ?? '', locationName: card.scanLocation?.name ?? '' }) }}
                   className="flex-1 py-2.5 rounded-xl bg-secondary border border-white/10 text-foreground text-sm"
                 >
                   キャンセル
@@ -490,17 +514,17 @@ export default function CardDetailPage() {
                   <p className="text-xs text-muted-foreground">初回名刺交換場所</p>
                   {card.scanLocation ? (
                     <>
+                      <p className={`text-sm mt-0.5 ${card.scanLocation.name ? 'text-foreground' : 'text-white/25'}`}>
+                        {card.scanLocation.name || '（地名未取得）'}
+                      </p>
                       <a
                         href={`https://maps.google.com/?q=${card.scanLocation.lat},${card.scanLocation.lng}`}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="text-sm text-blue-400 mt-0.5 block"
+                        className="text-xs text-blue-400/70 mt-0.5 block"
                       >
-                        📍 {card.scanLocation.lat.toFixed(5)}, {card.scanLocation.lng.toFixed(5)}
+                        📍 {card.scanLocation.lat.toFixed(5)}, {card.scanLocation.lng.toFixed(5)}（精度 ±{Math.round(card.scanLocation.accuracy)}m）
                       </a>
-                      <p className="text-xs text-muted-foreground mt-0.5">
-                        精度 ±{Math.round(card.scanLocation.accuracy)}m
-                      </p>
                     </>
                   ) : (
                     <p className="text-sm text-white/25 mt-0.5">—</p>

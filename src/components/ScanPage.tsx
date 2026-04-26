@@ -16,6 +16,27 @@ import { fetchCategories, createCategory, type Category } from '@/lib/categories
 type ScanStep = 'camera' | 'preview'
 type CardSide = 'front' | 'back'
 
+// ── Nominatim リバースジオコーディング（OpenStreetMap） ────────────────────
+async function reverseGeocode(lat: number, lng: number): Promise<string | null> {
+  try {
+    const res = await fetch(
+      `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=14&accept-language=ja`,
+      { headers: { 'User-Agent': 'AmbeBusinessCard/1.0' } },
+    )
+    if (!res.ok) return null
+    const data = await res.json() as { address?: Record<string, string>; display_name?: string }
+    const addr = data.address ?? {}
+    const parts = [
+      addr.state,
+      addr.city ?? addr.county ?? addr.town ?? addr.village,
+      addr.suburb ?? addr.city_district ?? addr.neighbourhood,
+    ].filter(Boolean)
+    return parts.length > 0 ? parts.join(' ') : (data.display_name ?? null)
+  } catch {
+    return null
+  }
+}
+
 // ── 氏名フィールドの問題検出（クライアントサイドのみ） ────────────────────
 const NAME_DEPT_SUFFIX_RE =
   /(?:部|課|係|室|グループ|チーム|部門|センター|事業部|本部|局)(?:長|次長|主任|担当|代理|補佐|マネージャー|リーダー|スタッフ)?/
@@ -170,6 +191,8 @@ export default function ScanPage() {
   const [saveError, setSaveError] = useState<string | null>(null)
   const [scanLocation, setScanLocation] = useState<{ lat: number; lng: number; accuracy: number } | null>(null)
   const [locationStatus, setLocationStatus] = useState<'loading' | 'obtained' | 'failed'>('loading')
+  const [locationName, setLocationName] = useState<string | null>(null)
+  const [locationGeoLoading, setLocationGeoLoading] = useState(false)
 
   const [frontImageBase64, setFrontImageBase64] = useState<string | null>(null)
   const [backImageBase64, setBackImageBase64] = useState<string | null>(null)
@@ -222,13 +245,18 @@ export default function ScanPage() {
       if (navigator.geolocation) {
         setLocationStatus('loading')
         navigator.geolocation.getCurrentPosition(
-          (pos) => {
-            setScanLocation({
+          async (pos) => {
+            const loc = {
               lat: pos.coords.latitude,
               lng: pos.coords.longitude,
               accuracy: pos.coords.accuracy,
-            })
+            }
+            setScanLocation(loc)
             setLocationStatus('obtained')
+            setLocationGeoLoading(true)
+            const name = await reverseGeocode(loc.lat, loc.lng)
+            setLocationName(name)
+            setLocationGeoLoading(false)
           },
           () => { setLocationStatus('failed') },
           { timeout: 10000, enableHighAccuracy: false },
@@ -387,6 +415,7 @@ export default function ScanPage() {
           scanned_lat: scanLocation.lat,
           scanned_lng: scanLocation.lng,
           scanned_accuracy: scanLocation.accuracy,
+          ...(locationName && { scanned_location_name: locationName }),
         }),
       })
       const encrypted_data = await aesEncryptString(dataKey, piiJson)
@@ -447,7 +476,7 @@ export default function ScanPage() {
     }
   }, [
     dataKey, bundle, editFields, frontImageBase64, backImageBase64,
-    ocrResult, backOcrResult, categories, selectedCategoryId, router, scanLocation,
+    ocrResult, backOcrResult, categories, selectedCategoryId, router, scanLocation, locationName,
   ])
 
   // ── Add category inline ────────────────────────────────────────────────────
@@ -721,22 +750,33 @@ export default function ScanPage() {
           )}
         </div>
 
-        {/* 位置情報 */}
-        <div className="flex items-center gap-1.5 px-1">
-          <span className="text-xs">📍</span>
+        {/* 名刺交換場所 */}
+        <div className="rounded-2xl bg-card border border-white/10 p-4 flex flex-col gap-2">
+          <label className="text-xs text-muted-foreground">名刺交換場所</label>
           {scanLocation ? (
-            <a
-              href={`https://maps.google.com/?q=${scanLocation.lat},${scanLocation.lng}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-xs text-blue-400 underline"
-            >
-              {scanLocation.lat.toFixed(5)}, {scanLocation.lng.toFixed(5)}（精度 ±{Math.round(scanLocation.accuracy)}m）
-            </a>
+            <>
+              <input
+                type="text"
+                value={locationName ?? ''}
+                onChange={(e) => setLocationName(e.target.value)}
+                placeholder={locationGeoLoading ? '地名を取得中...' : '場所名（任意・編集可）'}
+                className="w-full rounded-xl bg-background border border-white/10 px-3 py-2
+                  text-sm text-foreground placeholder:text-muted-foreground
+                  focus:outline-none focus:ring-1 focus:ring-blue-500"
+              />
+              <a
+                href={`https://maps.google.com/?q=${scanLocation.lat},${scanLocation.lng}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-xs text-blue-400/70"
+              >
+                📍 {scanLocation.lat.toFixed(5)}, {scanLocation.lng.toFixed(5)}（精度 ±{Math.round(scanLocation.accuracy)}m）
+              </a>
+            </>
           ) : locationStatus === 'loading' ? (
-            <span className="text-xs text-muted-foreground">位置情報を取得中...</span>
+            <p className="text-xs text-muted-foreground">位置情報を取得中...</p>
           ) : (
-            <span className="text-xs text-muted-foreground">位置情報なし（許可されていないか取得に失敗）</span>
+            <p className="text-xs text-muted-foreground">位置情報なし（許可されていないか取得に失敗）</p>
           )}
         </div>
 
