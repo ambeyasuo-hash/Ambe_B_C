@@ -27,7 +27,11 @@
       "Bash(npx next *)",
       "Bash(node -e \"const z = require\\('@zxing/browser'\\); const r = new z.BrowserQRCodeReader\\(\\); console.log\\(Object.getOwnPropertyNames\\(Object.getPrototypeOf\\(r\\)\\).join\\('\\\\n'\\)\\)\")",
       "Bash(node -e \"const z = require\\('@zxing/browser'\\); console.log\\(Object.keys\\(z\\)\\)\")",
-      "Bash(node -e \"const z = require\\('@zxing/browser'\\); const r = new z.BrowserQRCodeReader\\(\\); const proto = Object.getPrototypeOf\\(r\\); let p = proto; while\\(p && p !== Object.prototype\\) { console.log\\(Object.getOwnPropertyNames\\(p\\).join\\(', '\\)\\); p = Object.getPrototypeOf\\(p\\); }\")"
+      "Bash(node -e \"const z = require\\('@zxing/browser'\\); const r = new z.BrowserQRCodeReader\\(\\); const proto = Object.getPrototypeOf\\(r\\); let p = proto; while\\(p && p !== Object.prototype\\) { console.log\\(Object.getOwnPropertyNames\\(p\\).join\\(', '\\)\\); p = Object.getPrototypeOf\\(p\\); }\")",
+      "Bash(find \"C:\\\\Users\\\\yasuo\\\\Desktop\\\\Ambe_Business_card\\\\src\" -type f \\\\\\( -name \"*.tsx\" -o -name \"*.ts\" \\\\\\) -exec grep -l \"qr\\\\|QR\" {} \\\\;)",
+      "Bash(gh run *)",
+      "Bash(gh pr *)",
+      "PowerShell(gh pr list --repo ambeyasuo-hash/Ambe_B_C 2>&1)"
     ]
   }
 }
