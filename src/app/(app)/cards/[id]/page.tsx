@@ -27,6 +27,7 @@ interface PiiFields {
   title: string
   email: string
   tel: string
+  mobile?: string
   address: string
 }
 
@@ -50,6 +51,7 @@ const FIELD_LABELS: Array<{ key: keyof PiiFields; label: string; type: string }>
   { key: 'title', label: '役職', type: 'text' },
   { key: 'email', label: 'メール', type: 'email' },
   { key: 'tel', label: '電話', type: 'tel' },
+  { key: 'mobile', label: '携帯', type: 'tel' },
   { key: 'address', label: '住所', type: 'text' },
 ]
 
@@ -82,7 +84,7 @@ export default function CardDetailPage() {
 
   const [isEditing, setIsEditing] = useState(false)
   const [editFields, setEditFields] = useState<PiiFields & { notes: string }>({
-    name: '', furigana: '', company: '', title: '', email: '', tel: '', address: '', notes: '',
+    name: '', furigana: '', company: '', title: '', email: '', tel: '', mobile: '', address: '', notes: '',
   })
   const [isSaving, setIsSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
@@ -127,6 +129,7 @@ export default function CardDetailPage() {
         title: rawPii.title ?? '',
         email: rawPii.email ?? '',
         tel: rawPii.tel ?? '',
+        mobile: rawPii.mobile ?? '',
         address: rawPii.address ?? '',
       }
 
@@ -171,6 +174,7 @@ export default function CardDetailPage() {
         title: editFields.title,
         email: editFields.email,
         tel: editFields.tel,
+        mobile: editFields.mobile,
         address: editFields.address,
       })
       const encryptedData = await aesEncryptString(dataKey, piiJson)
@@ -203,7 +207,7 @@ export default function CardDetailPage() {
 
       setCard((prev) => prev ? {
         ...prev,
-        pii: { name: editFields.name, furigana: editFields.furigana, company: editFields.company, title: editFields.title, email: editFields.email, tel: editFields.tel, address: editFields.address },
+        pii: { name: editFields.name, furigana: editFields.furigana, company: editFields.company, title: editFields.title, email: editFields.email, tel: editFields.tel, mobile: editFields.mobile, address: editFields.address },
         row: { ...prev.row, notes: editFields.notes || null },
       } : null)
       setIsEditing(false)

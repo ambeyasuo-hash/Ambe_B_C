@@ -12,6 +12,7 @@ export interface BusinessCardOcrResult {
   title?: OcrField
   email?: OcrField
   tel?: OcrField
+  mobile?: OcrField
   address?: OcrField
   rawText: string
   confidence: number
@@ -131,6 +132,10 @@ export function cleanNameField(
   existingTitle: OcrField | undefined,
 ): { name?: OcrField; title?: OcrField } {
   if (!nameField) return {}
+  // 会社名キーワードを含む文字列は人名でないので早期リターン
+  if (COMPANY_KEYWORDS.some((k) => nameField.value.includes(k))) {
+    return {}
+  }
   const val = nameField.value.trim()
 
   // ① スペース区切りで分割して左右を判定
@@ -225,9 +230,31 @@ function parseRawTextFallback(rawText: string): Partial<BusinessCardOcrResult> {
       used.add(i)
       break
     }
+    // 携帯番号プレフィックスは mobile に任せる
+    if (/(?:0(?:70|80|90|50))/.test(lines[i])) continue
     const mb = lines[i].match(telBareRe)
     if (mb) {
       result.tel = { value: mb[1].trim(), confidence: 0.85 }
+      used.add(i)
+      break
+    }
+  }
+
+  // ── Mobile (携帯番号: 080/090/070/050) ─────────────────────────────────
+  // tel が既に存在する場合でも別途検出する（名刺には会社TELと携帯が両方載る）
+  const mobileBareRe = /(?:^|[\s　])(\+?(?:81[-\s]?)?(?:0(?:70|80|90|50)[-\s]\d{4}[-\s]\d{4}|0(?:70|80|90|50)\d{8}))(?:$|[\s　,，])/
+  const mobileLabelRe = /(?:携帯|Mobile|Cell)[.：:.\s]*([0-9０-９（）()\-\s+]{7,20})/i
+  for (let i = 0; i < lines.length; i++) {
+    if (used.has(i)) continue
+    const ml = lines[i].match(mobileLabelRe)
+    if (ml) {
+      result.mobile = { value: ml[1].trim(), confidence: 0.93 }
+      used.add(i)
+      break
+    }
+    const mb = lines[i].match(mobileBareRe)
+    if (mb) {
+      result.mobile = { value: mb[1].trim(), confidence: 0.88 }
       used.add(i)
       break
     }
@@ -490,6 +517,7 @@ export async function analyzeBusinessCardFront(
     title:    structured.title   ?? fallback.title,
     email:    structured.email   ?? fallback.email,
     tel:      structured.tel     ?? fallback.tel,
+    mobile:   fallback.mobile,
     address:  structured.address ?? fallback.address,
     rawText,
     confidence: calcAvgConfidence(analyzeResult),

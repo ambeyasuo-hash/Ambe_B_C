@@ -36,6 +36,7 @@ export function buildSearchTokens(result: BusinessCardOcrResult): string[] {
     result.title?.value,
     result.email?.value,
     result.tel?.value,
+    result.mobile?.value,
     result.rawText,
   ].filter((s): s is string => !!s)
 

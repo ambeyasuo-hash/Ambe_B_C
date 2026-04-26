@@ -76,6 +76,7 @@ interface EditFields {
   title: string
   email: string
   tel: string
+  mobile: string
   address: string
   memo: string
 }
@@ -87,6 +88,7 @@ const FORM_FIELDS: Array<{ key: keyof Omit<EditFields, 'memo'>; label: string; t
   { key: 'title', label: '役職', type: 'text' },
   { key: 'email', label: 'メール', type: 'email' },
   { key: 'tel', label: '電話', type: 'tel' },
+  { key: 'mobile', label: '携帯', type: 'tel' },
   { key: 'address', label: '住所', type: 'text' },
 ]
 
@@ -160,6 +162,7 @@ export default function ScanPage() {
   const [step, setStep] = useState<ScanStep>('camera')
   const [side, setSide] = useState<CardSide>('front')
   const [isPortrait, setIsPortrait] = useState(true)
+  const [cardOrientation, setCardOrientation] = useState<'portrait' | 'landscape'>('landscape')
   const [isAnalyzing, setIsAnalyzing] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
   const [cameraError, setCameraError] = useState<string | null>(null)
@@ -172,7 +175,7 @@ export default function ScanPage() {
   const [backOcrResult, setBackOcrResult] = useState<{ rawText: string; confidence: number } | null>(null)
 
   const [editFields, setEditFields] = useState<EditFields>({
-    name: '', furigana: '', company: '', title: '', email: '', tel: '', address: '', memo: '',
+    name: '', furigana: '', company: '', title: '', email: '', tel: '', mobile: '', address: '', memo: '',
   })
 
   const [categories, setCategories] = useState<Category[]>([])
@@ -261,28 +264,18 @@ export default function ScanPage() {
 
     const screenW = window.innerWidth
     const screenH = window.innerHeight
-    const portrait = screenH > screenW
 
-    // object-cover のスケール係数（画面を覆うために必要な拡大率）
+    // object-cover のスケール係数
     const scale = Math.max(screenW / videoW, screenH / videoH)
-
-    // 画面の端でクリップされているビデオの開始位置（ビデオピクセル座標）
     const visX = Math.max(0, (videoW - screenW / scale) / 2)
     const visY = Math.max(0, (videoH - screenH / scale) / 2)
 
-    // フレームオーバーレイの寸法（スクリーンピクセル）
-    let frameW_screen: number, frameH_screen: number
-    if (portrait) {
-      frameH_screen = screenH * 0.75
-      frameW_screen = frameH_screen * (9 / 16)
-    } else {
-      frameW_screen = screenW * 0.88
-      frameH_screen = frameW_screen * (9 / 16)
-    }
+    // フレームは常にポートレート（縦長）固定 — 画面高さの 75% × 名刺縦横比 (55:91)
+    const frameH_screen = screenH * 0.75
+    const frameW_screen = frameH_screen * (55 / 91)
     const frameX_screen = (screenW - frameW_screen) / 2
     const frameY_screen = (screenH - frameH_screen) / 2
 
-    // フレームをビデオピクセル座標へ変換してクロップ
     const cropX = visX + frameX_screen / scale
     const cropY = visY + frameY_screen / scale
     const cropW = frameW_screen / scale
@@ -294,8 +287,22 @@ export default function ScanPage() {
     if (!ctx) return null
     ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, canvas.width, canvas.height)
 
+    // 横の名刺は縦にしてフレームに合わせて撮影 → キャプチャ後に 90° 回転して横向きサムネに復元
+    if (cardOrientation === 'landscape') {
+      const rotated = document.createElement('canvas')
+      rotated.width  = canvas.height
+      rotated.height = canvas.width
+      const rctx = rotated.getContext('2d')
+      if (rctx) {
+        rctx.translate(rotated.width / 2, rotated.height / 2)
+        rctx.rotate(Math.PI / 2)
+        rctx.drawImage(canvas, -canvas.width / 2, -canvas.height / 2)
+      }
+      return rotated.toDataURL('image/jpeg', 0.92)
+    }
+
     return canvas.toDataURL('image/jpeg', 0.92)
-  }, [])
+  }, [cardOrientation])
 
   const handleCapture = useCallback(async () => {
     if (!bundle) return
@@ -325,6 +332,7 @@ export default function ScanPage() {
           title:    result.title?.value    ?? '',
           email:    result.email?.value    ?? '',
           tel:      result.tel?.value      ?? '',
+          mobile:   result.mobile?.value   ?? '',
           address:  result.address?.value  ?? '',
           memo:     '',
         })
@@ -364,6 +372,7 @@ export default function ScanPage() {
         title:    editFields.title,
         email:    editFields.email,
         tel:      editFields.tel,
+        mobile:   editFields.mobile,
         address:  editFields.address,
         ...(scanLocation && {
           scanned_lat: scanLocation.lat,
@@ -457,9 +466,7 @@ export default function ScanPage() {
   // ── Camera screen ──────────────────────────────────────────────────────────
 
   if (step === 'camera') {
-    const frameClasses = isPortrait
-      ? 'h-[75%] aspect-[9/16]'
-      : 'w-[88%] aspect-[16/9]'
+    const frameClass = 'h-[75%] aspect-[55/91]'
 
     return (
       <div
@@ -490,7 +497,7 @@ export default function ScanPage() {
         {/* Card frame + scan line */}
         {!cameraError && (
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-            <div className={`${frameClasses} relative border-2 border-dashed border-white/60 rounded-xl overflow-hidden`}>
+            <div className={`${frameClass} relative border-2 border-dashed border-white/60 rounded-xl overflow-hidden`}>
               <motion.div
                 className="absolute left-0 right-0 h-[2px] bg-gradient-to-r from-transparent via-blue-400/80 to-transparent"
                 animate={{ y: ['0%', '100%', '0%'] }}
@@ -533,6 +540,22 @@ export default function ScanPage() {
             </button>
           ) : (
             <>
+              {/* 名刺の向きトグル */}
+              <div className="flex items-center gap-1 rounded-xl border border-white/20 overflow-hidden">
+                {(['landscape', 'portrait'] as const).map((o) => (
+                  <button
+                    key={o}
+                    onClick={() => setCardOrientation(o)}
+                    className={`px-3 py-1.5 text-xs font-medium transition-colors ${
+                      cardOrientation === o
+                        ? 'bg-white/20 text-white'
+                        : 'text-white/50'
+                    }`}
+                  >
+                    {o === 'landscape' ? '横の名刺' : '縦の名刺'}
+                  </button>
+                ))}
+              </div>
               <motion.button
                 whileTap={{ scale: 0.92 }}
                 onClick={handleCapture}
@@ -544,7 +567,10 @@ export default function ScanPage() {
                 <div className="w-14 h-14 rounded-full bg-gradient-to-r from-blue-500 to-cyan-400" />
               </motion.button>
               <p className="text-white/60 text-xs text-center">
-                {side === 'front' ? '名刺の表面をフレームに合わせて撮影してください' : '名刺の裏面をフレームに合わせて撮影してください'}
+                {cardOrientation === 'landscape'
+                  ? '横の名刺は縦にしてフレームに合わせて撮影してください'
+                  : '縦の名刺をフレームに合わせて撮影してください'}
+                {side === 'back' ? '（裏面）' : ''}
               </p>
             </>
           )}
