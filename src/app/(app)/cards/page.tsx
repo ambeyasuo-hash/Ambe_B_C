@@ -8,7 +8,7 @@ import { useVault } from '@/context/VaultContext'
 import { aesDecryptString, hkdfDerive, hmacIndex } from '@/lib/crypto'
 import { fetchCategories, createCategory, type Category } from '@/lib/categories'
 
-type SortKey = 'date_desc' | 'date_asc' | 'name_asc'
+type SortKey = 'date_desc' | 'date_asc' | 'name_asc' | 'company_asc'
 
 interface CardRow {
   id: string
@@ -22,6 +22,7 @@ interface CardRow {
 interface DecryptedCard {
   id: string
   name: string
+  furigana: string
   company: string
   thumbnailUrl: string | null
   category: string | null
@@ -129,7 +130,8 @@ export default function CardsPage() {
 
       // created_at は NOT NULL DEFAULT now() で確実に存在するため sort に使用
       // scanned_at は nullable のため sort 列として不安定
-      if (sortKey !== 'name_asc') {
+      // name_asc / company_asc はクライアントサイドで復号後に並び替えるため DB は登録日順で返す
+      if (sortKey === 'date_asc' || sortKey === 'date_desc') {
         query = query.order('created_at', { ascending: sortKey === 'date_asc' })
       } else {
         query = query.order('created_at', { ascending: false })
@@ -143,7 +145,7 @@ export default function CardsPage() {
         rows.map(async (row, i): Promise<DecryptedCard> => {
           try {
             const piiJson = await aesDecryptString(dataKey, row.encrypted_data)
-            const pii = JSON.parse(piiJson) as { name?: string; company?: string }
+            const pii = JSON.parse(piiJson) as { name?: string; furigana?: string; company?: string }
 
             let thumbnailUrl: string | null = null
             if (row.encrypted_thumbnail_front) {
@@ -153,6 +155,7 @@ export default function CardsPage() {
             return {
               id: row.id,
               name: pii.name ?? '',
+              furigana: pii.furigana ?? '',
               company: pii.company ?? '',
               thumbnailUrl,
               category: row.card_category,
@@ -164,6 +167,7 @@ export default function CardsPage() {
             return {
               id: row.id,
               name: '（復号失敗）',
+              furigana: '',
               company: '',
               thumbnailUrl: null,
               category: row.card_category,
@@ -180,7 +184,14 @@ export default function CardsPage() {
       setIsKeyMismatch(totalCards > 0 && failedCards === totalCards)
 
       if (sortKey === 'name_asc') {
-        decrypted.sort((a, b) => a.name.localeCompare(b.name, 'ja'))
+        // フリガナが空の場合は氏名にフォールバック
+        decrypted.sort((a, b) => {
+          const ka = a.furigana || a.name
+          const kb = b.furigana || b.name
+          return ka.localeCompare(kb, 'ja')
+        })
+      } else if (sortKey === 'company_asc') {
+        decrypted.sort((a, b) => a.company.localeCompare(b.company, 'ja'))
       }
 
       setCards(decrypted)
@@ -246,7 +257,8 @@ export default function CardsPage() {
   const SORT_LABELS: Record<SortKey, string> = {
     date_desc: '登録日（新しい順）',
     date_asc: '登録日（古い順）',
-    name_asc: '氏名（あいうえお順）',
+    name_asc: 'フリガナ順',
+    company_asc: '社名順',
   }
 
   const allCategoryNames = ['すべて', ...categories.map((c) => c.name)]
@@ -288,7 +300,7 @@ export default function CardsPage() {
                 className="absolute right-0 top-11 z-30 w-52 rounded-2xl bg-card border border-white/10
                   shadow-xl shadow-black/40 overflow-hidden"
               >
-                {(['date_desc', 'date_asc', 'name_asc'] as SortKey[]).map((key) => (
+                {(['date_desc', 'date_asc', 'name_asc', 'company_asc'] as SortKey[]).map((key) => (
                   <button
                     key={key}
                     onClick={() => { setSortKey(key); setShowSortMenu(false) }}
