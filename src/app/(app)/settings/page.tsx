@@ -1107,6 +1107,20 @@ export default function SettingsPage() {
         </div>
       </AccordionSection>
 
+      {/* 取扱説明書リンク */}
+      <a
+        href="https://github.com/ambeyasuo-hash/Ambe_B_C/blob/master/docs/manual.md"
+        target="_blank"
+        rel="noopener noreferrer"
+        className="flex items-center justify-center gap-2 py-3 rounded-2xl
+          bg-card border border-white/10 text-sm text-muted-foreground
+          hover:text-foreground hover:border-white/20 transition-colors"
+      >
+        <span>📖</span>
+        <span>取扱説明書・セットアップガイド</span>
+        <span className="text-xs opacity-50">↗</span>
+      </a>
+
       {/* PinConfirmModal */}
       {pinModal && (
         <PinConfirmModal
