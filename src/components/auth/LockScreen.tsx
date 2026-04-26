@@ -52,7 +52,13 @@ export default function LockScreen({ initialMode }: { initialMode?: LockMode }) 
 
   // Check localStorage only on client
   useEffect(() => {
-    setCanUseBiometric(hasRegisteredCredential() && hasBundleAlpha())
+    const canBio = hasRegisteredCredential() && hasBundleAlpha()
+    setCanUseBiometric(canBio)
+    // QRインポート後など、クレデンシャルがない端末はPINモードで起動
+    if (!canBio && !initialMode) {
+      setMode('pin')
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   function resetToMode(m: LockMode) {
@@ -87,13 +93,17 @@ export default function LockScreen({ initialMode }: { initialMode?: LockMode }) 
     setLoading(true)
     setError('')
     try {
-      // このブラウザ/アプリでセットアップされていない場合（Safari + Chrome 別々など）
-      if (!hasRegisteredCredential() || !hasBundleAlpha()) {
-        setError(
-          'この端末・ブラウザではまだセットアップされていません。' +
-          '「別の方法で復旧する」→「別端末からQRで引き継ぐ」か、' +
-          '「24単語で復旧」でデータを引き継いでください。',
-        )
+      // クレデンシャル未登録（別ブラウザ・QRインポート後など）
+      if (!hasRegisteredCredential()) {
+        setError('この端末では生体認証が未登録です。PINでログインし、設定画面の「生体認証を再登録」で設定してください。')
+        setMode('pin')
+        setLoading(false)
+        return
+      }
+      // alpha bundle なし（PIN ログイン後の PRF upgrade 待ち）
+      if (!hasBundleAlpha()) {
+        setError('初回のみPINの入力が必要です（次回から生体認証のみでログインできます）')
+        setMode('pin')
         setLoading(false)
         return
       }

@@ -279,6 +279,8 @@ export default function SettingsPage() {
   const [sqlCopied, setSqlCopied] = useState(false)
   const [mnemonicWords, setMnemonicWords] = useState<string | null>(null)
   const [keepAliveConfirmed, setKeepAliveConfirmed] = useState(false)
+  const [mnemonicRegenLoading, setMnemonicRegenLoading] = useState(false)
+  const [mnemonicRegenMsg, setMnemonicRegenMsg] = useState('')
 
   useEffect(() => {
     if (bundle) {
@@ -504,6 +506,60 @@ export default function SettingsPage() {
     a.click()
     URL.revokeObjectURL(url)
   }, [mnemonicWords])
+
+  // ── Mnemonic regeneration ─────────────────────────────────────────────────
+
+  const handleMnemonicRegen = useCallback(async () => {
+    if (!bundle || !dataKey) return
+    setMnemonicRegenLoading(true)
+    setMnemonicRegenMsg('')
+    setPinModal({
+      show: true,
+      title: '24単語を再生成するためPINを入力してください',
+      onConfirm: async (pin: string) => {
+        try {
+          if (!pin) return
+          const { generateMnemonic24, deriveWrappingKeyFromMnemonic } = await import('@/lib/mnemonic')
+          const { wrapKey } = await import('@/lib/crypto')
+          const { saveVaultRow } = await import('@/lib/vault')
+
+          const newMnemonic = generateMnemonic24()
+          const betaKey = await deriveWrappingKeyFromMnemonic(newMnemonic)
+          const newWrappedBeta = await wrapKey(betaKey, dataKey)
+
+          // Supabase の wrapped_data_key_beta を更新
+          await saveVaultRow(bundle, {
+            user_email: bundle.userEmail,
+            encryption_salt: bundle.encryption_salt,
+            wrapped_data_key_alpha: bundle.wrapped_data_key_alpha,
+            wrapped_data_key_pin: bundle.wrapped_data_key_pin,
+            wrapped_data_key_beta: newWrappedBeta,
+          })
+
+          // localStorage の PIN bundle も更新
+          const currentBundle = await loadBundleWithPIN(pin)
+          const pinSaltHex = localStorage.getItem('config_bundle_pin_salt')!
+          const salt = Uint8Array.from(
+            pinSaltHex.match(/.{2}/g)!.map((h: string) => parseInt(h, 16)),
+          ) as unknown as Uint8Array<ArrayBuffer>
+          const updatedBundle: ConfigBundle = { ...currentBundle, wrapped_data_key_beta: newWrappedBeta }
+          await saveBundleWithPIN(pin, updatedBundle, salt)
+
+          localStorage.setItem('mnemonic_words', newMnemonic)
+          localStorage.setItem('mnemonic_confirmed', '0')
+          setMnemonicWords(newMnemonic)
+          setMnemonicConfirmed(false)
+          updateBundle(updatedBundle)
+          setMnemonicRegenMsg('24単語を再生成しました。必ず保管してください。')
+          setPinModal(null)
+        } catch (e) {
+          setMnemonicRegenMsg(e instanceof Error ? e.message : '再生成に失敗しました')
+        } finally {
+          setMnemonicRegenLoading(false)
+        }
+      },
+    })
+  }, [bundle, dataKey, updateBundle])
 
   const handleKeepAliveConfirm = useCallback((checked: boolean) => {
     localStorage.setItem('keep_alive_confirmed', checked ? '1' : '0')
@@ -958,13 +1014,25 @@ export default function SettingsPage() {
                 </div>
               </>
             ) : (
-              <div className="rounded-xl bg-amber-500/5 border border-amber-500/20 px-3 py-3">
+              <div className="rounded-xl bg-amber-500/5 border border-amber-500/20 px-3 py-3 flex flex-col gap-3">
                 <p className="text-xs text-muted-foreground leading-relaxed">
                   セットアップ時に記録した24単語を使用してください。
                 </p>
-                <p className="text-xs text-amber-300/60 mt-1 leading-relaxed">
-                  24単語はセットアップ画面にのみ表示されます。この画面での再表示はできません。
+                <p className="text-xs text-amber-300/60 leading-relaxed">
+                  別端末からQRで引き継いだ場合など、この端末に24単語が保存されていないときは新しい24単語を生成できます（Supabaseのバックアップキーも更新されます）。
                 </p>
+                <motion.button
+                  whileTap={{ scale: 0.97 }}
+                  onClick={handleMnemonicRegen}
+                  disabled={mnemonicRegenLoading}
+                  className="w-full py-2 rounded-xl border border-amber-500/30 text-amber-400 text-xs
+                    hover:bg-amber-500/10 transition-colors disabled:opacity-40"
+                >
+                  {mnemonicRegenLoading ? '生成中...' : '🔑 新しい24単語バックアップを生成する'}
+                </motion.button>
+                {mnemonicRegenMsg && (
+                  <p className="text-xs text-emerald-400">{mnemonicRegenMsg}</p>
+                )}
               </div>
             )}
             {copyMsg && <p className="text-xs text-emerald-400">{copyMsg}</p>}
