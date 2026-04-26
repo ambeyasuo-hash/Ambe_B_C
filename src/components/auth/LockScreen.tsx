@@ -14,7 +14,6 @@ import {
   type ConfigBundle,
 } from '@/lib/config-bundle'
 import { unlockWithAlpha } from '@/lib/vault'
-import { fetchVaultRow } from '@/lib/vault'
 import { useVault } from '@/context/VaultContext'
 import { validateMnemonic24, deriveWrappingKeyFromMnemonic, deriveEncryptionSalt } from '@/lib/mnemonic'
 import QRPairingImport from '@/components/QRPairingImport'
@@ -42,6 +41,7 @@ export default function LockScreen({ initialMode }: { initialMode?: LockMode }) 
 
   // Mnemonic recovery state (2 steps)
   const [mnemonicWords, setMnemonicWords] = useState('')
+  const [mnemonicEmail, setMnemonicEmail] = useState('')
   const [mnemonicSupabaseUrl, setMnemonicSupabaseUrl] = useState('')
   const [mnemonicSupabaseKey, setMnemonicSupabaseKey] = useState('')
   const [mnemonicNewPin, setMnemonicNewPin] = useState('')
@@ -71,6 +71,7 @@ export default function LockScreen({ initialMode }: { initialMode?: LockMode }) 
     setAmbeExportPin('')
     setAmbeAppPin('')
     setMnemonicWords('')
+    setMnemonicEmail('')
     setMnemonicSupabaseUrl('')
     setMnemonicSupabaseKey('')
     setMnemonicNewPin('')
@@ -239,33 +240,44 @@ export default function LockScreen({ initialMode }: { initialMode?: LockMode }) 
         setError('24単語が正しくありません。スペルと順序を確認してください。')
         return
       }
+      const email = mnemonicEmail.trim().toLowerCase()
+      if (!email || !email.includes('@')) {
+        setError('セットアップ時のメールアドレスを入力してください')
+        return
+      }
       if (!mnemonicSupabaseUrl.trim() || !mnemonicSupabaseKey.trim()) {
         setError('Supabase の接続情報を入力してください')
         return
       }
 
-      // encryption_salt を mnemonic から決定論的に導出
-      const encSalt = await deriveEncryptionSalt(words)
-
-      // Supabase から wrapped_data_key_beta を取得
-      const vaultRow = await fetchVaultRow({
-        supabase: { url: mnemonicSupabaseUrl.trim(), anon_key: mnemonicSupabaseKey.trim() },
-        encryption_salt: encSalt,
-      })
+      // メールアドレスで検索（24単語を再生成済みでも encryption_salt に依存せず機能する）
+      const { fetchVaultRowByEmail } = await import('@/lib/vault')
+      const { row: vaultRow, error: fetchError } = await fetchVaultRowByEmail(
+        { url: mnemonicSupabaseUrl.trim(), anon_key: mnemonicSupabaseKey.trim() },
+        email,
+      )
+      if (fetchError) {
+        setError(`Supabase 接続エラー: ${fetchError}`)
+        return
+      }
       if (!vaultRow) {
-        setError('Supabase にデータが見つかりません。接続情報と24単語を確認してください。')
+        setError('このメールアドレスのデータが Supabase に見つかりません。メールアドレスと接続情報を確認してください。')
         return
       }
 
       // mnemonic から beta key を導出して Data Key を復元
       const betaKey = await deriveWrappingKeyFromMnemonic(words)
       const { unwrapKey } = await import('@/lib/crypto')
-      const dataKey = await unwrapKey(betaKey, vaultRow.wrapped_data_key_beta)
-
-      pendingMnemonicDataKey.current = dataKey
-      pendingMnemonicVaultBeta.current = vaultRow.wrapped_data_key_beta
-      pendingMnemonicEncSalt.current = encSalt
-      setMnemonicStep(2)
+      try {
+        const dataKey = await unwrapKey(betaKey, vaultRow.wrapped_data_key_beta)
+        pendingMnemonicDataKey.current = dataKey
+        pendingMnemonicVaultBeta.current = vaultRow.wrapped_data_key_beta
+        // DB の encryption_salt を使う（ニーモニックから再導出せず HMAC 索引の整合性を保つ）
+        pendingMnemonicEncSalt.current = vaultRow.encryption_salt
+        setMnemonicStep(2)
+      } catch {
+        setError('24単語が正しくありません（復号に失敗しました）。単語を確認してください。')
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'リカバリに失敗しました')
     } finally {
@@ -530,6 +542,12 @@ export default function LockScreen({ initialMode }: { initialMode?: LockMode }) 
                   style={{ background: 'var(--input)', color: 'var(--foreground)', border: '1px solid var(--border)' }}
                 />
                 <input
+                  type="email" placeholder="セットアップ時のメールアドレス"
+                  value={mnemonicEmail}
+                  onChange={(e) => setMnemonicEmail(e.target.value)}
+                  className={inputClass} style={inputStyle}
+                />
+                <input
                   type="text" placeholder="Supabase URL（https://xxx.supabase.co）"
                   value={mnemonicSupabaseUrl}
                   onChange={(e) => setMnemonicSupabaseUrl(e.target.value)}
@@ -542,7 +560,7 @@ export default function LockScreen({ initialMode }: { initialMode?: LockMode }) 
                   className={inputClass} style={inputStyle}
                 />
                 <button onClick={handleMnemonicStep1}
-                  disabled={mnemonicWords.trim().split(/\s+/).length < 24 || !mnemonicSupabaseUrl || !mnemonicSupabaseKey || loading}
+                  disabled={mnemonicWords.trim().split(/\s+/).length < 24 || !mnemonicEmail.trim() || !mnemonicSupabaseUrl || !mnemonicSupabaseKey || loading}
                   className="w-full py-4 rounded-2xl font-bold text-white"
                   style={{ ...primaryBtn, opacity: loading ? 0.7 : 1 }}>
                   {loading ? '確認中...' : '次へ → 新PINを設定'}

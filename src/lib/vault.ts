@@ -67,6 +67,29 @@ export async function fetchVaultRow(
   return data as VaultRow
 }
 
+// ── Fetch by email (for mnemonic recovery — works even after mnemonic regen) ──
+
+export async function fetchVaultRowByEmail(
+  supabase: { url: string; anon_key: string },
+  email: string,
+): Promise<{ row: VaultRow | null; error: string | null }> {
+  try {
+    const sb = makeSupabaseClient(supabase.url, supabase.anon_key)
+    const { data, error } = await sb
+      .from('user_vault')
+      .select('encryption_salt, wrapped_data_key_alpha, wrapped_data_key_pin, wrapped_data_key_beta, user_email')
+      .eq('user_email', email)
+      .single()
+    if (error) {
+      if (error.code === 'PGRST116') return { row: null, error: null }
+      return { row: null, error: error.message }
+    }
+    return { row: data as VaultRow, error: null }
+  } catch (e) {
+    return { row: null, error: e instanceof Error ? e.message : '接続に失敗しました' }
+  }
+}
+
 // ── Unlock: unwrap Data Key using wrapping key alpha ──────────────────────
 
 export async function unlockWithAlpha(
