@@ -104,6 +104,7 @@ CREATE TABLE IF NOT EXISTS qr_transfers (
 ### 2-2. Azure AI Services（OCR）
 
 1. [https://portal.azure.com](https://portal.azure.com) にアクセスし、Microsoft アカウントでログイン
+  Azureアカウントを作成するために初回にクレジットカードもしくはデビッドカードの登録が必要です。
 2. 「リソースの作成」→「AI + Machine Learning」→「Document Intelligence」を選択
 3. 以下の設定でリソースを作成:
    - **価格レベル**: F0（無料）推奨
