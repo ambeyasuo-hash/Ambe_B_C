@@ -52,10 +52,11 @@ export default function LockScreen({ initialMode }: { initialMode?: LockMode }) 
 
   // Check localStorage only on client
   useEffect(() => {
-    const canBio = hasRegisteredCredential() && hasBundleAlpha()
-    setCanUseBiometric(canBio)
-    // QRインポート後など、クレデンシャルがない端末はPINモードで起動
-    if (!canBio && !initialMode) {
+    const hasCred = hasRegisteredCredential()
+    // alpha bundle は PRF upgrade で後から作られるので credential の有無だけで判定する
+    setCanUseBiometric(hasCred)
+    // クレデンシャルがない端末（QRインポート直後など）は PIN モードで起動
+    if (!hasCred && !initialMode) {
       setMode('pin')
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -100,27 +101,24 @@ export default function LockScreen({ initialMode }: { initialMode?: LockMode }) 
         setLoading(false)
         return
       }
-      // alpha bundle なし（PIN ログイン後の PRF upgrade 待ち）
-      if (!hasBundleAlpha()) {
-        setError('初回のみPINの入力が必要です（次回から生体認証のみでログインできます）')
-        setMode('pin')
-        setLoading(false)
-        return
-      }
 
       const result = await assertWebAuthn()
       if (result.kind === 'prf') {
-        // PRF assertion 成功 → bundle が PRF key で暗号化されていれば直接復号
-        try {
-          const bundle = await loadBundleWithAlpha(result.wrappingKey)
-          const dataKey = await unlockWithAlpha(result.wrappingKey, bundle)
-          handleUnlockWithFadeout(dataKey, bundle)
-        } catch {
-          // bundle がまだ PIN key で暗号化されている（初回 PRF ログイン）
-          pendingPrfKey.current = result.wrappingKey
-          setError('初回のみPINの入力が必要です（次回から生体認証のみでログインできます）')
-          setMode('pin')
+        if (hasBundleAlpha()) {
+          // PRF assertion 成功 → bundle が PRF key で暗号化されていれば直接復号
+          try {
+            const bundle = await loadBundleWithAlpha(result.wrappingKey)
+            const dataKey = await unlockWithAlpha(result.wrappingKey, bundle)
+            handleUnlockWithFadeout(dataKey, bundle)
+            return
+          } catch {
+            // bundle がまだ PIN key で暗号化されている（初回 PRF ログイン）
+          }
         }
+        // alpha bundle なし or 復号失敗 → PRF key を保持して PIN へ（PRF upgrade フロー）
+        pendingPrfKey.current = result.wrappingKey
+        setError('初回のみPINの入力が必要です（次回から生体認証のみでログインできます）')
+        setMode('pin')
       } else {
         // PRF 非対応 (iOS Safari / iOS Chrome): 生体認証は通過済み → PIN で復号
         setError('この端末では生体認証後にPINの入力が必要です')
