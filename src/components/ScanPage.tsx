@@ -162,7 +162,8 @@ export default function ScanPage() {
   const [step, setStep] = useState<ScanStep>('camera')
   const [side, setSide] = useState<CardSide>('front')
   const [isPortrait, setIsPortrait] = useState(true)
-  const [cardOrientation, setCardOrientation] = useState<'portrait' | 'landscape'>('landscape')
+  type CardOrientation = 'portrait' | 'landscape-left' | 'landscape-right'
+  const [cardOrientation, setCardOrientation] = useState<CardOrientation>('landscape-left')
   const [isAnalyzing, setIsAnalyzing] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
   const [cameraError, setCameraError] = useState<string | null>(null)
@@ -287,15 +288,15 @@ export default function ScanPage() {
     if (!ctx) return null
     ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, canvas.width, canvas.height)
 
-    // 横の名刺は縦にしてフレームに合わせて撮影 → キャプチャ後に 90° 回転して横向きサムネに復元
-    if (cardOrientation === 'landscape') {
+    if (cardOrientation !== 'portrait') {
       const rotated = document.createElement('canvas')
       rotated.width  = canvas.height
       rotated.height = canvas.width
       const rctx = rotated.getContext('2d')
       if (rctx) {
         rctx.translate(rotated.width / 2, rotated.height / 2)
-        rctx.rotate(Math.PI / 2)
+        // 左が上 → 時計回り +90°、右が上 → 反時計回り -90°
+        rctx.rotate(cardOrientation === 'landscape-left' ? Math.PI / 2 : -Math.PI / 2)
         rctx.drawImage(canvas, -canvas.width / 2, -canvas.height / 2)
       }
       return rotated.toDataURL('image/jpeg', 0.92)
@@ -542,17 +543,21 @@ export default function ScanPage() {
             <>
               {/* 名刺の向きトグル */}
               <div className="flex items-center gap-1 rounded-xl border border-white/20 overflow-hidden">
-                {(['landscape', 'portrait'] as const).map((o) => (
+                {([
+                  { value: 'portrait',        label: '縦の名刺' },
+                  { value: 'landscape-left',  label: '横・左が上' },
+                  { value: 'landscape-right', label: '横・右が上' },
+                ] as const).map(({ value, label }) => (
                   <button
-                    key={o}
-                    onClick={() => setCardOrientation(o)}
+                    key={value}
+                    onClick={() => setCardOrientation(value)}
                     className={`px-3 py-1.5 text-xs font-medium transition-colors ${
-                      cardOrientation === o
+                      cardOrientation === value
                         ? 'bg-white/20 text-white'
                         : 'text-white/50'
                     }`}
                   >
-                    {o === 'landscape' ? '横の名刺' : '縦の名刺'}
+                    {label}
                   </button>
                 ))}
               </div>
@@ -567,9 +572,11 @@ export default function ScanPage() {
                 <div className="w-14 h-14 rounded-full bg-gradient-to-r from-blue-500 to-cyan-400" />
               </motion.button>
               <p className="text-white/60 text-xs text-center">
-                {cardOrientation === 'landscape'
-                  ? '横の名刺は縦にしてフレームに合わせて撮影してください'
-                  : '縦の名刺をフレームに合わせて撮影してください'}
+                {cardOrientation === 'portrait'
+                  ? '縦の名刺をフレームに合わせて撮影してください'
+                  : cardOrientation === 'landscape-left'
+                  ? '横の名刺を左端が上になるよう縦にしてフレームに合わせてください'
+                  : '横の名刺を右端が上になるよう縦にしてフレームに合わせてください'}
                 {side === 'back' ? '（裏面）' : ''}
               </p>
             </>
