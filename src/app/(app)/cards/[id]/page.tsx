@@ -243,7 +243,23 @@ export default function CardDetailPage() {
     }
     setGeminiLoading(true)
     try {
-      const prompt = `名刺交換後のお礼メールのテンプレートを日本語で生成してください。\n業界カテゴリ: ${card.row.card_category ?? '不明'}\n役職ランク: ${card.pii.title ? card.pii.title : '不明'}\n{{氏名}}と{{社名}}はプレースホルダーとして残してください。`
+      const { name, company, title } = card.pii
+      const industry = card.row.industry_category ?? card.row.card_category ?? '不明'
+      const prompt = [
+        '名刺交換後のお礼メールを日本語で作成してください。',
+        '',
+        '【相手の情報】',
+        `氏名：${name || '（不明）'}`,
+        `会社名：${company || '（不明）'}`,
+        `部署・役職：${title || '（不明）'}`,
+        `業界：${industry}`,
+        '',
+        '【厳守事項】',
+        '- 件名と本文のみを出力すること。解説・コメント・注釈・見出し・箇条書きは一切出力しないこと',
+        '- {{}} 等のプレースホルダーは使わず、上記の情報を本文に直接記載すること',
+        '- 署名欄の氏名・会社名・部署は「（要記入）」とし、メールアドレスは「（要記入）」とすること',
+        '- 出力形式：件名：〇〇 の1行の後に空行、そのまま本文（宛名から署名まで）',
+      ].join('\n')
       const res = await fetch('/api/gemini', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -252,11 +268,7 @@ export default function CardDetailPage() {
       const json = (await res.json()) as { text?: string; error?: string }
       if (!res.ok) throw new Error(json.error ?? 'Gemini API エラー')
 
-      const text = (json.text ?? '')
-        .replace(/\{\{氏名\}\}/g, card.pii.name)
-        .replace(/\{\{社名\}\}/g, card.pii.company)
-
-      setGeminiEmail(text)
+      setGeminiEmail((json.text ?? '').trim())
       setShowGeminiModal(true)
     } catch (e) {
       setToastMsg(e instanceof Error ? e.message : 'メール生成に失敗しました')
