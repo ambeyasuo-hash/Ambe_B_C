@@ -1,8 +1,8 @@
 # あんべの名刺代わり — Design Document v6.1.0
 # Phoenix Rebuild Edition (Config-as-Credential Architecture)
 
-**発行日**: 2026-04-21  
-**ステータス**: Phase 3-8 QR ペアリング実装中  
+**発行日**: 2026-04-26  
+**ステータス**: Phase 3〜9 実装進行中（認証・スキャン・設定確定済み）  
 **前版**: v5.0.9 Phoenix Edition（廃止）
 
 ---
@@ -11,6 +11,7 @@
 
 | バージョン | 日付 | 主な変更 |
 |---|---|---|
+| v6.2.0 | 2026-04-26 | **認証フロー確定・OCR拡張・カメラ仕様確定**。LockScreen の `canUseBiometric` を `hasRegisteredCredential()` のみに変更（alpha bundle 有無チェックを削除、PRF upgrade フロー安定化）。QRインポート後の生体認証再登録 → 動作確定。設定画面に24単語バックアップ再生成機能追加。OCR に `mobile` フィールド追加（080/090/070/050 検出）。カメラ常時縦フレーム＋3択向きトグル（縦/横・左上/横・右上）確定。furigana フィールド確定（cards/scan 双方）。Gemini モデルを `gemini-2.5-flash`（安定版）に更新。UNINITIALIZED 初回選択画面実装確定。StatusBar からシステム時計・バッテリーアイコン削除確定。 |
 | v6.1.0 | 2026-04-25 | QR ペアリングを Supabase リレー方式に変更（QR ペイロードサイズ問題を解消）。qr_transfers テーブルを追加。禁止事項の「中継サーバー」を「第三者中継サーバー」に明確化。 |
 | v6.0.3 | 2026-04-24 | **Vault 整合性保証（多端末鍵不整合防止）を正式仕様化**。`user_vault` に `user_email UNIQUE` 制約・`vault_generation` カラムを追加。SecuritySetup に Vault 存在確認ステップを必須化。`/api/save-business-card` にサーバーサイドのソルト整合性チェックを追加。クライアントサイドの鍵不整合検出 UI を仕様化。禁止事項に「Vault 存在確認なしの fresh setup」を追加。Config Bundle に `wrapped_data_key_pin` を正式追加（v6.0.3 以降必須）。 |
 | v6.0.2 | 2026-04-21 | ホスティング・配布アーキテクチャの確定。Vercel を「土管」モデルに確定（ユーザーキーを環境変数に持たない）。GitHub Actions テンプレートがユーザーの Supabase に直接 ping する方式に統一（CRON_SECRET・Vercel Cron 廃止）。OCRプレビュー・確認・保存フロー（Section 9.11）を新設。お礼メール機能（Section 9.12）を新設。business_cards に `thank_you_sent` / `thank_you_sent_at` カラムを追加。|
@@ -312,24 +313,31 @@ Layer 4: クライアントサイド鍵不整合の検出（UX 最終防衛）
   ↓
 【LOCKED】
   ↓
-保護方式を自動判定
-  ├─ localStorage['config_bundle_wrapped_alpha'] あり & WebAuthn 利用可能
-  │   → 生体認証ボタン（デフォルト・最速）
-  │      ↓ タップ
-  │      WebAuthn assertion → Level 1a wrapping key 導出
-  │      → Config Bundle 復号
-  │      → wrapped_data_key_alpha を unwrap
-  │      → Data Key をメモリへ
-  │      → UNLOCKED
+保護方式を自動判定（v6.2.0 確定仕様）
+  ├─ WebAuthn credential が localStorage にある（hasRegisteredCredential() = true）
+  │   → 生体認証ボタンを表示（alpha bundle の有無は問わない）
+  │      ↓ タップ → WebAuthn assertion 実行
+  │      ┌─ PRF 対応 & alpha bundle あり
+  │      │   → loadBundleWithAlpha → unlockWithAlpha → UNLOCKED（最速）
+  │      │
+  │      ├─ PRF 対応 & alpha bundle なし（生体認証再登録直後など）
+  │      │   → PRF key を pendingPrfKey.current に保持
+  │      │   → PIN 入力画面へ（「初回のみPINが必要」メッセージ）
+  │      │   → PIN 成功後に alpha bundle を作成（PRF upgrade）
+  │      │   → 次回以降は生体認証のみでログイン可能
+  │      │
+  │      └─ PRF 非対応（iOS Safari 等）
+  │          → 生体認証は通過 → PIN 入力画面へ
   │
-  └─ 生体認証が使えない or 失敗
-      → PIN 入力画面
+  └─ credential なし（QRインポート直後・別ブラウザ等）
+      → 自動で PIN モードで起動（生体認証ボタンを表示しない）
          ↓ PIN 入力
          PBKDF2 で wrapping key 導出
-         → Config Bundle 復号
-         → wrapped_data_key_alpha を unwrap
+         → Config Bundle 復号（PIN bundle）
+         → wrapped_data_key_pin を unwrap
          → Data Key をメモリへ
          → UNLOCKED
+         ※ 設定画面「生体認証を再登録」でいつでも生体認証を追加可能
 
 UNLOCKED 後
   ↓
@@ -418,11 +426,17 @@ QR ペイロード例（〜170 文字・Version 3 相当・確実に読める）
 [7] Config Bundle = AES-256-GCM-Decrypt(ct, wrapping_key, iv)
 [8] qr_transfers の行を DELETE（cleanup）
   ↓
-[9] Device B 自身の保護方式を設定
-    ├─ 生体認証（Device B で WebAuthn を新規登録）
-    └─ PIN（Device A と別でよい）
+[9] この端末用の新しい PIN salt で Data Key を再ラップ → saveBundleWithPIN
+    ※ saveBundleWithAlpha は呼ばない（WebAuthn 未登録のため）
   ↓
 [10] Data Key をメモリへロード → UNLOCKED
+  ↓
+[11] ★ 生体認証のセットアップ（任意・推奨）
+    設定画面 → 「生体認証を再登録」
+    → WebAuthn 新規登録
+    → 次回起動から: 生体認証ボタンが表示される
+    → 初回タップ時: 「初回のみPINが必要」→ PIN 入力で PRF upgrade 完了
+    → 以降: 生体認証のみでログイン可能
 ```
 
 ### 3.4 .ambe ファイル経由フロー
@@ -678,7 +692,7 @@ jobs:
 
 - Supabase (PostgreSQL + RLS)
 - Azure AI Document Intelligence（`@azure/ai-form-recognizer` / CORS回避のためVercel API Route経由・キーは動的注入）
-- Google Gemini 2.5 Flash（非 PII テンプレート生成のみ・キーは動的注入）
+- Google Gemini（モデル: `gemini-2.5-flash` 安定版・非 PII テンプレート生成のみ・キーは動的注入）
 
 **スケーラビリティ**: Vercel はステートレスな中継のみを担当。データは各ユーザーの Supabase に直接格納されるため、無料枠内でも多人数利用が可能。
 
@@ -690,7 +704,11 @@ jobs:
 
 ```
 撮影 → Next.js API Route → Azure AI Document Intelligence
-  表面: prebuilt-layout → {name, company, title, email, tel, address}
+  表面: prebuilt-businessCard → {name, furigana, company, title, email, tel, mobile, address}
+        ※ name: cleanNameField() で「株式会社〇〇」混入・部署名混入を除去
+        ※ furigana: カタカナ/ひらがなのみの行から自動検出
+        ※ mobile: 080/090/070/050 プレフィックスを tel と分離して検出
+        ※ rawText fallback: parseRawTextFallback() で構造化失敗時を補完
   裏面: prebuilt-read   → 全文テキスト → notes カラムへ
 ```
 
@@ -1192,15 +1210,25 @@ className={gradients[index % 3]}
 - 色: 穏やかなブルー（警告ではなく情報）
 - ホバーテキスト: 「15 分間の無操作でロックされます」
 
-#### 設定画面: 緊急リカバリセクション
+#### ロック画面: 起動モード判定（v6.2.0 確定）
+
+- `hasRegisteredCredential()` = true → 生体認証ボタンをデフォルト表示
+- `hasRegisteredCredential()` = false（QRインポート直後・未登録）→ PIN モードで自動起動（生体認証ボタン非表示）
+- alpha bundle がなくても credential があれば生体認証モードで起動する（PRF upgrade フロー）
+
+#### 設定画面: 緊急リカバリセクション（v6.2.0 確定）
 
 - ラベル: 「🔴 緊急リカバリ (Emergency Recovery)」
 - デフォルト折り畳み
 - Amber/Orange トーン（警告レベル）
-- 24 単語バックアップ導線:
+- 24 単語バックアップ導線（`localStorage['mnemonic_words']` がある場合）:
   - コピー
   - .vcf エクスポート（連絡先名「あんべの名刺代わり」、備考欄に 24 単語）
   - メール送信（件名「【バックアップ】あんべの名刺代わり・復号キー」）
+- **24 単語バックアップ再生成**（`mnemonic_words` が localStorage にない場合、v6.2.0 追加）:
+  - 「🔑 新しい24単語バックアップを生成する」ボタン
+  - PIN 確認後、新 mnemonic 生成 → `wrapped_data_key_beta` を Supabase に上書き → localStorage に保存
+  - QRインポート後の新端末でも 24 単語バックアップを再取得可能
 
 #### 設定画面: API 接続設定セクション
 
@@ -1515,9 +1543,9 @@ OCR プレビュー画面（⑧ 新設）← この画面
 
 ### 9.10 スキャン画面 UI 仕様
 
-#### 向き自動検出とフレーム適応
+#### カメラフレームと向きトグル（v6.2.0 確定仕様）
 
-名刺には横向き（landscape）と縦向き（portrait）がある。スキャン時にユーザーが名刺をカメラに向けると、フレームがその向きを検出して画面いっぱいに広がる。
+名刺には横向き（landscape）と縦向き（portrait）がある。**カメラフレームは常に縦（portrait）固定**で、ユーザーが名刺の向きをトグルで選択する。
 
 ```
 横名刺の場合:
@@ -1540,14 +1568,29 @@ OCR プレビュー画面（⑧ 新設）← この画面
 └────────────────┘
 ```
 
+**確定仕様（v6.2.0）**:
+
+```
+【縦の名刺】
+  スマホ縦持ち → 縦フレームに合わせてそのまま撮影 → 縦サムネイル保存
+
+【横の名刺（左が上）】
+  名刺の左端を上にしてスマホで縦持ち撮影 → 撮影後に画像を +90°（時計回り）回転 → 横サムネイル保存
+
+【横の名刺（右が上）】
+  名刺の右端を上にしてスマホで縦持ち撮影 → 撮影後に画像を −90°（反時計回り）回転 → 横サムネイル保存
+```
+
 **実装方針**:
-- `Screen Orientation API` で端末の向きを検知し、フレームのアスペクト比を自動切り替え
-  - 端末縦向き（portrait）→ フレーム `aspect-ratio: 9/16`（縦名刺）、画面高さいっぱい
-  - 端末横向き（landscape）→ フレーム `aspect-ratio: 16/9`（横名刺）、画面幅いっぱい
-- 手動切り替えボタンは設置しない（UX上不要）
-- カメラビューエリアは常に `position: fixed; inset: 0` で画面全体を使用
-- フレームは向きに関わらず常に画面の有効領域いっぱいに広がる
-- スキャンラインアニメーションはフレームの縦方向に常に流れる
+- フレームは端末向きに関係なく常に縦（aspect-ratio: 55/91）固定
+- カメラ下部に 3 択トグルを表示: `[縦の名刺] [横・左が上] [横・右が上]`
+- `captureImage()` でキャプチャ後、`cardOrientation` に応じて canvas を回転
+  - `portrait`: 回転なし
+  - `landscape-left`: canvas を +90°（時計回り）回転
+  - `landscape-right`: canvas を −90°（反時計回り）回転
+- OCR には回転済み画像を送信するため、Azure は正位置の画像を受け取る
+- カメラビューエリアは常に `position: fixed; inset: 0`（画面全体）
+- スキャンラインアニメーションはフレームの縦方向に流れる
 - ステータスバー・ボトムナビはカメラビューの上に重ねて表示（透過）
 
 **Two-Phase スキャン UI**:
