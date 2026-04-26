@@ -169,6 +169,7 @@ export default function ScanPage() {
   const [cameraError, setCameraError] = useState<string | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [scanLocation, setScanLocation] = useState<{ lat: number; lng: number; accuracy: number } | null>(null)
+  const [locationStatus, setLocationStatus] = useState<'loading' | 'obtained' | 'failed'>('loading')
 
   const [frontImageBase64, setFrontImageBase64] = useState<string | null>(null)
   const [backImageBase64, setBackImageBase64] = useState<string | null>(null)
@@ -218,16 +219,23 @@ export default function ScanPage() {
         videoRef.current.srcObject = stream
       }
       // 位置情報をカメラ起動と並行して取得（拒否されても続行）
-      navigator.geolocation?.getCurrentPosition(
-        (pos) =>
-          setScanLocation({
-            lat: pos.coords.latitude,
-            lng: pos.coords.longitude,
-            accuracy: pos.coords.accuracy,
-          }),
-        () => {},
-        { timeout: 10000, enableHighAccuracy: false },
-      )
+      if (navigator.geolocation) {
+        setLocationStatus('loading')
+        navigator.geolocation.getCurrentPosition(
+          (pos) => {
+            setScanLocation({
+              lat: pos.coords.latitude,
+              lng: pos.coords.longitude,
+              accuracy: pos.coords.accuracy,
+            })
+            setLocationStatus('obtained')
+          },
+          () => { setLocationStatus('failed') },
+          { timeout: 10000, enableHighAccuracy: false },
+        )
+      } else {
+        setLocationStatus('failed')
+      }
     } catch {
       setCameraError('カメラへのアクセスが許可されていません。ブラウザの設定を確認してください。')
     }
@@ -713,15 +721,24 @@ export default function ScanPage() {
           )}
         </div>
 
-        {/* 位置情報インジケーター */}
-        {scanLocation && (
-          <div className="flex items-center gap-1.5 px-1">
-            <span className="text-xs">📍</span>
-            <span className="text-xs text-muted-foreground">
-              位置情報を取得済み（精度 ±{Math.round(scanLocation.accuracy)}m）
-            </span>
-          </div>
-        )}
+        {/* 位置情報 */}
+        <div className="flex items-center gap-1.5 px-1">
+          <span className="text-xs">📍</span>
+          {scanLocation ? (
+            <a
+              href={`https://maps.google.com/?q=${scanLocation.lat},${scanLocation.lng}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-xs text-blue-400 underline"
+            >
+              {scanLocation.lat.toFixed(5)}, {scanLocation.lng.toFixed(5)}（精度 ±{Math.round(scanLocation.accuracy)}m）
+            </a>
+          ) : locationStatus === 'loading' ? (
+            <span className="text-xs text-muted-foreground">位置情報を取得中...</span>
+          ) : (
+            <span className="text-xs text-muted-foreground">位置情報なし（許可されていないか取得に失敗）</span>
+          )}
+        </div>
 
         {/* Scan back prompt */}
         {!backImageBase64 && showBackPrompt && (

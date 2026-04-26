@@ -31,11 +31,18 @@ interface PiiFields {
   address: string
 }
 
+interface ScanLocation {
+  lat: number
+  lng: number
+  accuracy: number
+}
+
 interface CardState {
   row: CardRow
   pii: PiiFields
   thumbnailFrontUrl: string | null
   thumbnailBackUrl: string | null
+  scanLocation: ScanLocation | null
 }
 
 const GRADIENT_CLASSES = [
@@ -121,7 +128,9 @@ export default function CardDetailPage() {
 
       const row = data as CardRow
       const piiJson = await aesDecryptString(dataKey, row.encrypted_data)
-      const rawPii = JSON.parse(piiJson) as Partial<PiiFields>
+      const rawPii = JSON.parse(piiJson) as Partial<PiiFields & {
+        scanned_lat: number; scanned_lng: number; scanned_accuracy: number
+      }>
       const pii: PiiFields = {
         name: rawPii.name ?? '',
         furigana: rawPii.furigana ?? '',
@@ -132,6 +141,11 @@ export default function CardDetailPage() {
         mobile: rawPii.mobile ?? '',
         address: rawPii.address ?? '',
       }
+      const scanLocation: ScanLocation | null = rawPii.scanned_lat != null ? {
+        lat: rawPii.scanned_lat,
+        lng: rawPii.scanned_lng!,
+        accuracy: rawPii.scanned_accuracy ?? 0,
+      } : null
 
       let thumbnailFrontUrl: string | null = null
       if (row.encrypted_thumbnail_front) {
@@ -142,7 +156,7 @@ export default function CardDetailPage() {
         thumbnailBackUrl = await aesDecryptString(dataKey, row.encrypted_thumbnail_back)
       }
 
-      setCard({ row, pii, thumbnailFrontUrl, thumbnailBackUrl })
+      setCard({ row, pii, thumbnailFrontUrl, thumbnailBackUrl, scanLocation })
       setEditFields({ ...pii, notes: row.notes ?? '' })
     } catch (e) {
       setError(e instanceof Error ? e.message : '名刺の読み込みに失敗しました')
@@ -176,6 +190,12 @@ export default function CardDetailPage() {
         tel: editFields.tel,
         mobile: editFields.mobile,
         address: editFields.address,
+        // 位置情報は編集対象外のため元のデータを保持する
+        ...(card.scanLocation && {
+          scanned_lat: card.scanLocation.lat,
+          scanned_lng: card.scanLocation.lng,
+          scanned_accuracy: card.scanLocation.accuracy,
+        }),
       })
       const encryptedData = await aesEncryptString(dataKey, piiJson)
 
@@ -425,29 +445,36 @@ export default function CardDetailPage() {
             <>
               {FIELD_LABELS.map(({ key, label }) => {
                 const value = card.pii[key]
-                if (!value) return null
                 return (
                   <div key={key} className="flex items-start justify-between gap-2">
                     <div className="flex-1 min-w-0">
                       <p className="text-xs text-muted-foreground">{label}</p>
-                      <p className="text-sm text-foreground mt-0.5 break-all">{value}</p>
+                      <p className={`text-sm mt-0.5 break-all ${value ? 'text-foreground' : 'text-white/25'}`}>
+                        {value || '—'}
+                      </p>
                     </div>
-                    <button
-                      onClick={() => handleCopy(value, label)}
-                      className="flex-none text-[10px] px-2 py-1 rounded-lg bg-white/5 text-muted-foreground
-                        border border-white/10 mt-4 hover:bg-white/10 transition-colors"
-                    >
-                      コピー
-                    </button>
+                    {value && (
+                      <button
+                        onClick={() => handleCopy(value, label)}
+                        className="flex-none text-[10px] px-2 py-1 rounded-lg bg-white/5 text-muted-foreground
+                          border border-white/10 mt-4 hover:bg-white/10 transition-colors"
+                      >
+                        コピー
+                      </button>
+                    )}
                   </div>
                 )
               })}
-              {card.row.notes && (
-                <div className="flex items-start justify-between gap-2">
-                  <div className="flex-1 min-w-0">
-                    <p className="text-xs text-muted-foreground">メモ</p>
+              <div className="flex items-start justify-between gap-2">
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs text-muted-foreground">メモ</p>
+                  {card.row.notes ? (
                     <p className="text-sm text-foreground mt-0.5 whitespace-pre-wrap">{card.row.notes}</p>
-                  </div>
+                  ) : (
+                    <p className="text-sm text-white/25 mt-0.5">—</p>
+                  )}
+                </div>
+                {card.row.notes && (
                   <button
                     onClick={() => handleCopy(card.row.notes!, 'メモ')}
                     className="flex-none text-[10px] px-2 py-1 rounded-lg bg-white/5 text-muted-foreground
@@ -455,8 +482,31 @@ export default function CardDetailPage() {
                   >
                     コピー
                   </button>
+                )}
+              </div>
+              {/* 初回名刺交換場所 */}
+              <div className="flex items-start gap-2 border-t border-white/5 pt-4">
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs text-muted-foreground">初回名刺交換場所</p>
+                  {card.scanLocation ? (
+                    <>
+                      <a
+                        href={`https://maps.google.com/?q=${card.scanLocation.lat},${card.scanLocation.lng}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-sm text-blue-400 mt-0.5 block"
+                      >
+                        📍 {card.scanLocation.lat.toFixed(5)}, {card.scanLocation.lng.toFixed(5)}
+                      </a>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        精度 ±{Math.round(card.scanLocation.accuracy)}m
+                      </p>
+                    </>
+                  ) : (
+                    <p className="text-sm text-white/25 mt-0.5">—</p>
+                  )}
                 </div>
-              )}
+              </div>
             </>
           )}
         </div>
