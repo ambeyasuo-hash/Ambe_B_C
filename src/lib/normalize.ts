@@ -33,6 +33,7 @@ export function buildSearchTokens(result: BusinessCardOcrResult): string[] {
     result.name?.value,
     result.furigana?.value,
     result.company?.value,
+    result.department?.value,
     result.title?.value,
     result.email?.value,
     result.tel?.value,

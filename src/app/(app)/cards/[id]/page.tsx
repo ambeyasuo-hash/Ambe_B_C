@@ -8,6 +8,7 @@ import { useVault } from '@/context/VaultContext'
 import { aesDecryptString, aesEncryptString, hkdfDerive, hmacIndex } from '@/lib/crypto'
 import { fetchCategories, type Category } from '@/lib/categories'
 import { reverseGeocode } from '@/lib/geocode'
+import { autoFurigana } from '@/lib/furigana'
 
 interface CardRow {
   id: string
@@ -26,6 +27,7 @@ interface PiiFields {
   name: string
   furigana: string
   company: string
+  department?: string
   title: string
   email: string
   tel: string
@@ -58,6 +60,7 @@ const FIELD_LABELS: Array<{ key: keyof PiiFields; label: string; type: string }>
   { key: 'name', label: '氏名', type: 'text' },
   { key: 'furigana', label: 'フリガナ', type: 'text' },
   { key: 'company', label: '会社名', type: 'text' },
+  { key: 'department', label: '部署', type: 'text' },
   { key: 'title', label: '役職', type: 'text' },
   { key: 'email', label: 'メール', type: 'email' },
   { key: 'tel', label: '電話', type: 'tel' },
@@ -94,10 +97,11 @@ export default function CardDetailPage() {
 
   const [isEditing, setIsEditing] = useState(false)
   const [editFields, setEditFields] = useState<PiiFields & { notes: string; locationName: string }>({
-    name: '', furigana: '', company: '', title: '', email: '', tel: '', mobile: '', address: '', notes: '', locationName: '',
+    name: '', furigana: '', company: '', department: '', title: '', email: '', tel: '', mobile: '', address: '', notes: '', locationName: '',
   })
   const [isSaving, setIsSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
+  const [furiganaLoading, setFuriganaLoading] = useState(false)
 
   const [showDeleteModal, setShowDeleteModal] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
@@ -145,6 +149,7 @@ export default function CardDetailPage() {
         name: rawPii.name ?? '',
         furigana: rawPii.furigana ?? '',
         company: rawPii.company ?? '',
+        department: rawPii.department ?? '',
         title: rawPii.title ?? '',
         email: rawPii.email ?? '',
         tel: rawPii.tel ?? '',
@@ -168,7 +173,7 @@ export default function CardDetailPage() {
       }
 
       setCard({ row, pii, thumbnailFrontUrl, thumbnailBackUrl, scanLocation })
-      setEditFields({ ...pii, notes: row.notes ?? '', locationName: scanLocation?.name ?? '' })
+      setEditFields({ ...pii, department: pii.department ?? '', notes: row.notes ?? '', locationName: scanLocation?.name ?? '' })
     } catch (e) {
       setError(e instanceof Error ? e.message : '名刺の読み込みに失敗しました')
     } finally {
@@ -184,6 +189,15 @@ export default function CardDetailPage() {
       .then(setCategories)
       .catch(() => {})
   }, [bundle])
+
+  const handleNameBlur = useCallback(async () => {
+    if (!editFields.furigana && editFields.name) {
+      setFuriganaLoading(true)
+      const result = await autoFurigana(editFields.name, bundle?.gemini.key)
+      if (result) setEditFields((prev) => ({ ...prev, furigana: result }))
+      setFuriganaLoading(false)
+    }
+  }, [editFields.name, editFields.furigana, bundle])
 
   const handleEditCoordChange = useCallback(async () => {
     const lat = parseFloat(editLocLat)
@@ -230,6 +244,7 @@ export default function CardDetailPage() {
         name: editFields.name,
         furigana: editFields.furigana,
         company: editFields.company,
+        department: editFields.department,
         title: editFields.title,
         email: editFields.email,
         tel: editFields.tel,
@@ -273,7 +288,7 @@ export default function CardDetailPage() {
 
       setCard((prev) => prev ? {
         ...prev,
-        pii: { name: editFields.name, furigana: editFields.furigana, company: editFields.company, title: editFields.title, email: editFields.email, tel: editFields.tel, mobile: editFields.mobile, address: editFields.address },
+        pii: { name: editFields.name, furigana: editFields.furigana, company: editFields.company, department: editFields.department, title: editFields.title, email: editFields.email, tel: editFields.tel, mobile: editFields.mobile, address: editFields.address },
         row: { ...prev.row, notes: editFields.notes || null, card_category: newCardCategory },
         scanLocation: updatedLocation,
       } : null)
@@ -310,16 +325,19 @@ export default function CardDetailPage() {
     }
     setGeminiLoading(true)
     try {
-      const { name, company, title } = card.pii
+      const { name, company, department, title } = card.pii
       const industry = card.row.industry_category ?? card.row.card_category ?? '不明'
+      // 制御文字・改行をサニタイズして Gemini プロンプトインジェクションを防ぐ
+      const san = (s: string) => s.replace(/[\n\r\x00-\x1f\x7f]/g, ' ').trim().slice(0, 200)
       const prompt = [
         '名刺交換後のお礼メールを日本語で作成してください。',
         '',
         '【相手の情報】',
-        `氏名：${name || '（不明）'}`,
-        `会社名：${company || '（不明）'}`,
-        `部署・役職：${title || '（不明）'}`,
-        `業界：${industry}`,
+        `氏名：${san(name || '（不明）')}`,
+        `会社名：${san(company || '（不明）')}`,
+        `部署：${san(department || '（不明）')}`,
+        `役職：${san(title || '（不明）')}`,
+        `業界：${san(industry)}`,
         '',
         '【厳守事項】',
         '- 件名と本文のみを出力すること。解説・コメント・注釈・見出し・箇条書きは一切出力しないこと',
@@ -405,6 +423,7 @@ export default function CardDetailPage() {
           <button
             onClick={() => {
               setIsEditing(true)
+              setEditFields((prev) => ({ ...prev, department: card.pii.department ?? '' }))
               setEditCategoryId(categories.find((c) => c.name === card.row.card_category)?.id ?? 'system-default')
               setEditLocLat(card.scanLocation?.lat.toFixed(6) ?? '')
               setEditLocLng(card.scanLocation?.lng.toFixed(6) ?? '')
@@ -455,11 +474,17 @@ export default function CardDetailPage() {
             <>
               {FIELD_LABELS.map(({ key, label, type }) => (
                 <div key={key}>
-                  <label className="text-xs text-muted-foreground">{label}</label>
+                  <label className="text-xs text-muted-foreground flex items-center gap-2">
+                    {label}
+                    {key === 'furigana' && furiganaLoading && (
+                      <span className="text-[10px] text-blue-400 animate-pulse">取得中...</span>
+                    )}
+                  </label>
                   <input
                     type={type}
-                    value={editFields[key]}
+                    value={editFields[key] ?? ''}
                     onChange={(e) => setEditFields((prev) => ({ ...prev, [key]: e.target.value }))}
+                    onBlur={key === 'name' ? handleNameBlur : undefined}
                     className="mt-1 w-full rounded-xl bg-background border border-white/10 px-3 py-2
                       text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-blue-500"
                   />
@@ -558,7 +583,7 @@ export default function CardDetailPage() {
                   onClick={() => {
                     setIsEditing(false)
                     setSaveError(null)
-                    setEditFields({ ...card.pii, notes: card.row.notes ?? '', locationName: card.scanLocation?.name ?? '' })
+                    setEditFields({ ...card.pii, department: card.pii.department ?? '', notes: card.row.notes ?? '', locationName: card.scanLocation?.name ?? '' })
                     setEditCategoryId(categories.find((c) => c.name === card.row.card_category)?.id ?? 'system-default')
                     setEditLocLat(card.scanLocation?.lat.toFixed(6) ?? '')
                     setEditLocLng(card.scanLocation?.lng.toFixed(6) ?? '')

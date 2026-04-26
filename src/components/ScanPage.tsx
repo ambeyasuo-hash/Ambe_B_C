@@ -13,6 +13,7 @@ import { aesEncryptString, hkdfDerive, hmacIndex } from '@/lib/crypto'
 import { buildSearchTokens } from '@/lib/normalize'
 import { fetchCategories, createCategory, type Category } from '@/lib/categories'
 import { reverseGeocode } from '@/lib/geocode'
+import { autoFurigana } from '@/lib/furigana'
 
 type ScanStep = 'camera' | 'preview'
 type CardSide = 'front' | 'back'
@@ -74,6 +75,7 @@ interface EditFields {
   name: string
   furigana: string
   company: string
+  department: string
   title: string
   email: string
   tel: string
@@ -86,6 +88,7 @@ const FORM_FIELDS: Array<{ key: keyof Omit<EditFields, 'memo'>; label: string; t
   { key: 'name', label: '氏名', type: 'text' },
   { key: 'furigana', label: 'フリガナ', type: 'text' },
   { key: 'company', label: '会社名', type: 'text' },
+  { key: 'department', label: '部署', type: 'text' },
   { key: 'title', label: '役職', type: 'text' },
   { key: 'email', label: 'メール', type: 'email' },
   { key: 'tel', label: '電話', type: 'tel' },
@@ -183,8 +186,9 @@ export default function ScanPage() {
   const [backOcrResult, setBackOcrResult] = useState<{ rawText: string; confidence: number } | null>(null)
 
   const [editFields, setEditFields] = useState<EditFields>({
-    name: '', furigana: '', company: '', title: '', email: '', tel: '', mobile: '', address: '', memo: '',
+    name: '', furigana: '', company: '', department: '', title: '', email: '', tel: '', mobile: '', address: '', memo: '',
   })
+  const [furiganaLoading, setFuriganaLoading] = useState(false)
 
   const [categories, setCategories] = useState<Category[]>([])
   const [selectedCategoryId, setSelectedCategoryId] = useState<string>('system-default')
@@ -347,17 +351,27 @@ export default function ScanPage() {
           bundle.azure.key,
         )
         setOcrResult(result)
+        const initialFurigana = result.furigana?.value ?? ''
         setEditFields({
-          name:     result.name?.value     ?? '',
-          furigana: result.furigana?.value ?? '',
-          company:  result.company?.value  ?? '',
-          title:    result.title?.value    ?? '',
-          email:    result.email?.value    ?? '',
-          tel:      result.tel?.value      ?? '',
-          mobile:   result.mobile?.value   ?? '',
-          address:  result.address?.value  ?? '',
-          memo:     '',
+          name:       result.name?.value       ?? '',
+          furigana:   initialFurigana,
+          company:    result.company?.value    ?? '',
+          department: result.department?.value ?? '',
+          title:      result.title?.value      ?? '',
+          email:      result.email?.value      ?? '',
+          tel:        result.tel?.value        ?? '',
+          mobile:     result.mobile?.value     ?? '',
+          address:    result.address?.value    ?? '',
+          memo:       '',
         })
+        // OCR でフリガナが取れなかった場合、氏名から自動生成を試みる
+        if (!initialFurigana && result.name?.value) {
+          setFuriganaLoading(true)
+          autoFurigana(result.name.value, bundle?.gemini.key).then((kana) => {
+            if (kana) setEditFields((prev) => ({ ...prev, furigana: kana }))
+            setFuriganaLoading(false)
+          })
+        }
         setShowBackPrompt(true)
         setStep('preview')
       } else {
@@ -392,6 +406,17 @@ export default function ScanPage() {
     setLocationGeoLoading(false)
   }, [editLat, editLng])
 
+  // ── Auto furigana on name blur ─────────────────────────────────────────────
+
+  const handleNameBlur = useCallback(async () => {
+    if (!editFields.furigana && editFields.name) {
+      setFuriganaLoading(true)
+      const kana = await autoFurigana(editFields.name, bundle?.gemini.key)
+      if (kana) setEditFields((prev) => ({ ...prev, furigana: kana }))
+      setFuriganaLoading(false)
+    }
+  }, [editFields.name, editFields.furigana, bundle])
+
   // ── Save ───────────────────────────────────────────────────────────────────
 
   const handleSave = useCallback(async () => {
@@ -401,14 +426,15 @@ export default function ScanPage() {
     try {
       // [1] Encrypt PII JSON（位置情報も E2EE 対象として含める）
       const piiJson = JSON.stringify({
-        name:     editFields.name,
-        furigana: editFields.furigana,
-        company:  editFields.company,
-        title:    editFields.title,
-        email:    editFields.email,
-        tel:      editFields.tel,
-        mobile:   editFields.mobile,
-        address:  editFields.address,
+        name:       editFields.name,
+        furigana:   editFields.furigana,
+        company:    editFields.company,
+        department: editFields.department,
+        title:      editFields.title,
+        email:      editFields.email,
+        tel:        editFields.tel,
+        mobile:     editFields.mobile,
+        address:    editFields.address,
         ...(scanLocation && {
           scanned_lat: scanLocation.lat,
           scanned_lng: scanLocation.lng,
@@ -845,11 +871,17 @@ export default function ScanPage() {
             const nameIssue = key === 'name' ? detectNameIssue(editFields.name) : null
             return (
               <div key={key}>
-                <label className="text-xs text-muted-foreground">{label}</label>
+                <label className="text-xs text-muted-foreground flex items-center gap-2">
+                  {label}
+                  {key === 'furigana' && furiganaLoading && (
+                    <span className="text-[10px] text-blue-400 animate-pulse">取得中...</span>
+                  )}
+                </label>
                 <input
                   type={type}
                   value={editFields[key]}
                   onChange={(e) => setEditFields((prev) => ({ ...prev, [key]: e.target.value }))}
+                  onBlur={key === 'name' ? handleNameBlur : undefined}
                   className={`mt-1 w-full rounded-xl bg-background border px-3 py-2
                     text-sm text-foreground placeholder:text-muted-foreground
                     focus:outline-none focus:ring-1 focus:ring-blue-500

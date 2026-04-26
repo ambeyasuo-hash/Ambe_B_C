@@ -11,7 +11,7 @@ import StatusBar from '@/components/layout/StatusBar'
 const APP_VERSION = 'v6.2.1'
 
 // 取扱説明書 URL — Notion ページ作成後にここを差し替える
-const MANUAL_URL = 'https://github.com/ambeyasuo-hash/Ambe_B_C#readme'
+const MANUAL_URL = 'https://github.com/ambeyasuo-hash/Ambe_B_C/blob/master/docs/manual.md'
 
 const TICKER_ITEMS = [
   `📦 ${APP_VERSION}`,

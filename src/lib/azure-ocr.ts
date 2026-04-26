@@ -1,5 +1,7 @@
 'use client'
 
+import { romajiNameToKatakana } from './furigana'
+
 export interface OcrField {
   value: string
   confidence: number
@@ -9,6 +11,7 @@ export interface BusinessCardOcrResult {
   name?: OcrField
   furigana?: OcrField
   company?: OcrField
+  department?: OcrField
   title?: OcrField
   email?: OcrField
   tel?: OcrField
@@ -400,6 +403,39 @@ function parseRawTextFallback(rawText: string): Partial<BusinessCardOcrResult> {
     }
   }
 
+  // ── Furigana from romaji（ローマ字表記をカタカナに変換） ─────────────────
+  // 名刺に「YAMADA Taro」のようなローマ字読みが印刷されている場合、
+  // 未使用の英語人名行を検出してカタカナフリガナとして採用する
+  if (!result.furigana && result.name && /[一-龯]/.test(result.name.value)) {
+    for (let i = 0; i < lines.length; i++) {
+      if (used.has(i)) continue
+      if (EN_NAME_RE.test(lines[i])) {
+        const katakana = romajiNameToKatakana(lines[i])
+        if (katakana.length > 1) {
+          result.furigana = { value: katakana, confidence: 0.72 }
+          used.add(i)
+        }
+        break
+      }
+    }
+  }
+
+  // ── Department（部署名）検出 ───────────────────────────────────────────────
+  // 役職ランク（長/主任/etc.）を含まない純粋な組織単位名行を部署として採用する
+  if (!result.department) {
+    const DEPT_PURE_RE = /(?:部|課|係|室|グループ|チーム|部門|センター|事業部|本部|局|所|科|ユニット)$/
+    const RANK_SUFFIX_RE = /(?:長|次長|主任|担当|代理|補佐|マネージャー|リーダー)$/
+    for (let i = 0; i < lines.length; i++) {
+      if (used.has(i)) continue
+      const l = lines[i]
+      if (DEPT_PURE_RE.test(l) && !RANK_SUFFIX_RE.test(l)) {
+        result.department = { value: l, confidence: 0.75 }
+        used.add(i)
+        break
+      }
+    }
+  }
+
   // ── Company フォールバック (キーワードなしの場合) ─────────────────────
   // 会社名キーワードが一切ない名刺向けに、未使用の長めの行を会社名候補とする
   if (!result.company) {
@@ -493,12 +529,13 @@ export async function analyzeBusinessCardFront(
   const { name: cleanedName, title: inferredTitle } = cleanNameField(rawName, rawTitle)
 
   const structured = {
-    name:    cleanedName,
-    company: extractField(fields, 'CompanyNames', 'Organizations', 'Company', 'CompanyName'),
-    title:   rawTitle ?? inferredTitle,
-    email:   extractField(fields, 'Emails', 'Email', 'EmailAddress'),
-    tel:     extractField(fields, 'PhoneNumbers', 'Phone', 'Tel', 'MobilePhone'),
-    address: extractField(fields, 'Addresses', 'Address'),
+    name:       cleanedName,
+    company:    extractField(fields, 'CompanyNames', 'Organizations', 'Company', 'CompanyName'),
+    department: extractField(fields, 'Departments', 'Department'),
+    title:      rawTitle ?? inferredTitle,
+    email:      extractField(fields, 'Emails', 'Email', 'EmailAddress'),
+    tel:        extractField(fields, 'PhoneNumbers', 'Phone', 'Tel', 'MobilePhone'),
+    address:    extractField(fields, 'Addresses', 'Address'),
   }
 
   // rawText フォールバックを常に実行し、低信頼度の structured フィールドを補完する。
@@ -511,14 +548,15 @@ export async function analyzeBusinessCardFront(
     : (fallback.name ?? structured.name)
 
   return {
-    name:     mergedName,
-    furigana: fallback.furigana,
-    company:  structured.company ?? fallback.company,
-    title:    structured.title   ?? fallback.title,
-    email:    structured.email   ?? fallback.email,
-    tel:      structured.tel     ?? fallback.tel,
-    mobile:   fallback.mobile,
-    address:  structured.address ?? fallback.address,
+    name:       mergedName,
+    furigana:   fallback.furigana,
+    company:    structured.company    ?? fallback.company,
+    department: structured.department ?? fallback.department,
+    title:      structured.title      ?? fallback.title,
+    email:      structured.email      ?? fallback.email,
+    tel:        structured.tel        ?? fallback.tel,
+    mobile:     fallback.mobile,
+    address:    structured.address    ?? fallback.address,
     rawText,
     confidence: calcAvgConfidence(analyzeResult),
   }
