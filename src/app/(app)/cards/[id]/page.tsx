@@ -6,6 +6,8 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { getSupabaseClient } from '@/lib/supabase'
 import { useVault } from '@/context/VaultContext'
 import { aesDecryptString, aesEncryptString, hkdfDerive, hmacIndex } from '@/lib/crypto'
+import { fetchCategories, type Category } from '@/lib/categories'
+import { reverseGeocode } from '@/lib/geocode'
 
 interface CardRow {
   id: string
@@ -102,6 +104,13 @@ export default function CardDetailPage() {
 
   const [toastMsg, setToastMsg] = useState<string | null>(null)
 
+  const [categories, setCategories] = useState<Category[]>([])
+  const [editCategoryId, setEditCategoryId] = useState('system-default')
+  const [showCoordEdit, setShowCoordEdit] = useState(false)
+  const [editLocLat, setEditLocLat] = useState('')
+  const [editLocLng, setEditLocLng] = useState('')
+  const [coordGeoLoading, setCoordGeoLoading] = useState(false)
+
   const [geminiLoading, setGeminiLoading] = useState(false)
   const [geminiEmail, setGeminiEmail] = useState<string | null>(null)
   const [showGeminiModal, setShowGeminiModal] = useState(false)
@@ -169,6 +178,23 @@ export default function CardDetailPage() {
 
   useEffect(() => { loadCard() }, [loadCard])
 
+  useEffect(() => {
+    if (!bundle) return
+    fetchCategories(bundle.supabase.url, bundle.supabase.anon_key, bundle.encryption_salt)
+      .then(setCategories)
+      .catch(() => {})
+  }, [bundle])
+
+  const handleEditCoordChange = useCallback(async () => {
+    const lat = parseFloat(editLocLat)
+    const lng = parseFloat(editLocLng)
+    if (isNaN(lat) || isNaN(lng)) return
+    setCoordGeoLoading(true)
+    const name = await reverseGeocode(lat, lng)
+    if (name !== null) setEditFields((prev) => ({ ...prev, locationName: name }))
+    setCoordGeoLoading(false)
+  }, [editLocLat, editLocLng])
+
   const handleCopy = useCallback(async (text: string, label: string) => {
     try {
       await navigator.clipboard.writeText(text)
@@ -183,6 +209,23 @@ export default function CardDetailPage() {
     setIsSaving(true)
     setSaveError(null)
     try {
+      // カテゴリ
+      const selectedCat = categories.find((c) => c.id === editCategoryId)
+      const newCardCategory = editCategoryId === 'system-default' ? null : (selectedCat?.name ?? null)
+
+      // 座標（手動修正済みがあればそちらを優先）
+      const lat = editLocLat ? parseFloat(editLocLat) : null
+      const lng = editLocLng ? parseFloat(editLocLng) : null
+      const hasValidCoords = lat !== null && lng !== null && !isNaN(lat) && !isNaN(lng)
+      const updatedLocation: ScanLocation | null = card.scanLocation
+        ? {
+            lat: hasValidCoords ? lat! : card.scanLocation.lat,
+            lng: hasValidCoords ? lng! : card.scanLocation.lng,
+            accuracy: card.scanLocation.accuracy,
+            name: editFields.locationName || null,
+          }
+        : null
+
       const piiJson = JSON.stringify({
         name: editFields.name,
         furigana: editFields.furigana,
@@ -192,11 +235,11 @@ export default function CardDetailPage() {
         tel: editFields.tel,
         mobile: editFields.mobile,
         address: editFields.address,
-        ...(card.scanLocation && {
-          scanned_lat: card.scanLocation.lat,
-          scanned_lng: card.scanLocation.lng,
-          scanned_accuracy: card.scanLocation.accuracy,
-          ...(editFields.locationName && { scanned_location_name: editFields.locationName }),
+        ...(updatedLocation && {
+          scanned_lat: updatedLocation.lat,
+          scanned_lng: updatedLocation.lng,
+          scanned_accuracy: updatedLocation.accuracy,
+          ...(updatedLocation.name && { scanned_location_name: updatedLocation.name }),
         }),
       })
       const encryptedData = await aesEncryptString(dataKey, piiJson)
@@ -222,6 +265,7 @@ export default function CardDetailPage() {
           encrypted_data: encryptedData,
           search_hashes: searchHashes,
           notes: editFields.notes || null,
+          card_category: newCardCategory,
         })
         .eq('id', id)
 
@@ -230,8 +274,8 @@ export default function CardDetailPage() {
       setCard((prev) => prev ? {
         ...prev,
         pii: { name: editFields.name, furigana: editFields.furigana, company: editFields.company, title: editFields.title, email: editFields.email, tel: editFields.tel, mobile: editFields.mobile, address: editFields.address },
-        row: { ...prev.row, notes: editFields.notes || null },
-        scanLocation: prev.scanLocation ? { ...prev.scanLocation, name: editFields.locationName || null } : null,
+        row: { ...prev.row, notes: editFields.notes || null, card_category: newCardCategory },
+        scanLocation: updatedLocation,
       } : null)
       setIsEditing(false)
       setToastMsg('保存しました')
@@ -240,7 +284,7 @@ export default function CardDetailPage() {
     } finally {
       setIsSaving(false)
     }
-  }, [dataKey, bundle, card, editFields, id])
+  }, [dataKey, bundle, card, editFields, id, editCategoryId, categories, editLocLat, editLocLng])
 
   const handleDelete = useCallback(async () => {
     if (!bundle) return
@@ -359,7 +403,13 @@ export default function CardDetailPage() {
         </span>
         {!isEditing && (
           <button
-            onClick={() => setIsEditing(true)}
+            onClick={() => {
+              setIsEditing(true)
+              setEditCategoryId(categories.find((c) => c.name === card.row.card_category)?.id ?? 'system-default')
+              setEditLocLat(card.scanLocation?.lat.toFixed(6) ?? '')
+              setEditLocLng(card.scanLocation?.lng.toFixed(6) ?? '')
+              setShowCoordEdit(false)
+            }}
             className="text-sm text-blue-400"
           >
             ✏️ 編集
@@ -436,16 +486,63 @@ export default function CardDetailPage() {
                     className="mt-1 w-full rounded-xl bg-background border border-white/10 px-3 py-2
                       text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-blue-500"
                   />
-                  <a
-                    href={`https://maps.google.com/?q=${card.scanLocation.lat},${card.scanLocation.lng}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-xs text-blue-400/70 mt-1 block"
+                  <button
+                    onClick={() => setShowCoordEdit((v) => !v)}
+                    className="text-xs text-muted-foreground/60 mt-2"
                   >
-                    📍 {card.scanLocation.lat.toFixed(5)}, {card.scanLocation.lng.toFixed(5)}
-                  </a>
+                    座標を修正 {showCoordEdit ? '▴' : '▾'}
+                  </button>
+                  {showCoordEdit && (
+                    <div className="flex gap-2 mt-2">
+                      <div className="flex-1">
+                        <label className="text-[10px] text-muted-foreground">緯度</label>
+                        <input
+                          type="number"
+                          value={editLocLat}
+                          onChange={(e) => setEditLocLat(e.target.value)}
+                          onBlur={handleEditCoordChange}
+                          step="0.000001"
+                          className="mt-1 w-full rounded-xl bg-background border border-white/10 px-2 py-1.5
+                            text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-blue-500"
+                        />
+                      </div>
+                      <div className="flex-1">
+                        <label className="text-[10px] text-muted-foreground">経度</label>
+                        <input
+                          type="number"
+                          value={editLocLng}
+                          onChange={(e) => setEditLocLng(e.target.value)}
+                          onBlur={handleEditCoordChange}
+                          step="0.000001"
+                          className="mt-1 w-full rounded-xl bg-background border border-white/10 px-2 py-1.5
+                            text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-blue-500"
+                        />
+                      </div>
+                    </div>
+                  )}
+                  {coordGeoLoading && <p className="text-[10px] text-muted-foreground mt-1">地名を取得中...</p>}
                 </div>
               )}
+              <div className="border-t border-white/5 pt-3">
+                <label className="text-xs text-muted-foreground">カテゴリ</label>
+                <div className="flex flex-wrap gap-2 mt-2">
+                  <button
+                    onClick={() => setEditCategoryId('system-default')}
+                    className={`px-3 py-1 rounded-full text-xs font-medium border transition-colors ${editCategoryId === 'system-default' ? 'bg-white/20 border-white/30 text-foreground' : 'bg-transparent border-white/10 text-muted-foreground'}`}
+                  >
+                    未分類
+                  </button>
+                  {categories.map((cat, idx) => (
+                    <button
+                      key={cat.id}
+                      onClick={() => setEditCategoryId(cat.id)}
+                      className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${editCategoryId === cat.id ? `bg-gradient-to-r ${GRADIENT_CLASSES[idx % 3]} text-white` : 'bg-white/5 border border-white/10 text-muted-foreground'}`}
+                    >
+                      {cat.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
               {saveError && <p className="text-xs text-red-400">{saveError}</p>}
               <div className="flex gap-2">
                 <motion.button
@@ -458,7 +555,15 @@ export default function CardDetailPage() {
                   {isSaving ? '保存中...' : '保存'}
                 </motion.button>
                 <button
-                  onClick={() => { setIsEditing(false); setSaveError(null); setEditFields({ ...card.pii, notes: card.row.notes ?? '', locationName: card.scanLocation?.name ?? '' }) }}
+                  onClick={() => {
+                    setIsEditing(false)
+                    setSaveError(null)
+                    setEditFields({ ...card.pii, notes: card.row.notes ?? '', locationName: card.scanLocation?.name ?? '' })
+                    setEditCategoryId(categories.find((c) => c.name === card.row.card_category)?.id ?? 'system-default')
+                    setEditLocLat(card.scanLocation?.lat.toFixed(6) ?? '')
+                    setEditLocLng(card.scanLocation?.lng.toFixed(6) ?? '')
+                    setShowCoordEdit(false)
+                  }}
                   className="flex-1 py-2.5 rounded-xl bg-secondary border border-white/10 text-foreground text-sm"
                 >
                   キャンセル

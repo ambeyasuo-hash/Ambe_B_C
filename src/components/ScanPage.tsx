@@ -12,30 +12,10 @@ import {
 import { aesEncryptString, hkdfDerive, hmacIndex } from '@/lib/crypto'
 import { buildSearchTokens } from '@/lib/normalize'
 import { fetchCategories, createCategory, type Category } from '@/lib/categories'
+import { reverseGeocode } from '@/lib/geocode'
 
 type ScanStep = 'camera' | 'preview'
 type CardSide = 'front' | 'back'
-
-// ── Nominatim リバースジオコーディング（OpenStreetMap） ────────────────────
-async function reverseGeocode(lat: number, lng: number): Promise<string | null> {
-  try {
-    const res = await fetch(
-      `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=14&accept-language=ja`,
-      { headers: { 'User-Agent': 'AmbeBusinessCard/1.0' } },
-    )
-    if (!res.ok) return null
-    const data = await res.json() as { address?: Record<string, string>; display_name?: string }
-    const addr = data.address ?? {}
-    const parts = [
-      addr.state,
-      addr.city ?? addr.county ?? addr.town ?? addr.village,
-      addr.suburb ?? addr.city_district ?? addr.neighbourhood,
-    ].filter(Boolean)
-    return parts.length > 0 ? parts.join(' ') : (data.display_name ?? null)
-  } catch {
-    return null
-  }
-}
 
 // ── 氏名フィールドの問題検出（クライアントサイドのみ） ────────────────────
 const NAME_DEPT_SUFFIX_RE =
@@ -193,6 +173,9 @@ export default function ScanPage() {
   const [locationStatus, setLocationStatus] = useState<'loading' | 'obtained' | 'failed'>('loading')
   const [locationName, setLocationName] = useState<string | null>(null)
   const [locationGeoLoading, setLocationGeoLoading] = useState(false)
+  const [showCoordEdit, setShowCoordEdit] = useState(false)
+  const [editLat, setEditLat] = useState('')
+  const [editLng, setEditLng] = useState('')
 
   const [frontImageBase64, setFrontImageBase64] = useState<string | null>(null)
   const [backImageBase64, setBackImageBase64] = useState<string | null>(null)
@@ -252,6 +235,8 @@ export default function ScanPage() {
               accuracy: pos.coords.accuracy,
             }
             setScanLocation(loc)
+            setEditLat(loc.lat.toFixed(6))
+            setEditLng(loc.lng.toFixed(6))
             setLocationStatus('obtained')
             setLocationGeoLoading(true)
             const name = await reverseGeocode(loc.lat, loc.lng)
@@ -393,6 +378,19 @@ export default function ScanPage() {
       setIsAnalyzing(false)
     }
   }, [bundle, captureImage, side, stopCamera, startCamera])
+
+  // ── Coordinate manual edit ─────────────────────────────────────────────────
+
+  const handleCoordChange = useCallback(async () => {
+    const lat = parseFloat(editLat)
+    const lng = parseFloat(editLng)
+    if (isNaN(lat) || isNaN(lng)) return
+    setScanLocation((prev) => prev ? { ...prev, lat, lng } : { lat, lng, accuracy: 0 })
+    setLocationGeoLoading(true)
+    const name = await reverseGeocode(lat, lng)
+    setLocationName(name)
+    setLocationGeoLoading(false)
+  }, [editLat, editLng])
 
   // ── Save ───────────────────────────────────────────────────────────────────
 
@@ -764,14 +762,49 @@ export default function ScanPage() {
                   text-sm text-foreground placeholder:text-muted-foreground
                   focus:outline-none focus:ring-1 focus:ring-blue-500"
               />
-              <a
-                href={`https://maps.google.com/?q=${scanLocation.lat},${scanLocation.lng}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-xs text-blue-400/70"
-              >
-                📍 {scanLocation.lat.toFixed(5)}, {scanLocation.lng.toFixed(5)}（精度 ±{Math.round(scanLocation.accuracy)}m）
-              </a>
+              <div className="flex items-center gap-2">
+                <a
+                  href={`https://maps.google.com/?q=${scanLocation.lat},${scanLocation.lng}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs text-blue-400/70 flex-1"
+                >
+                  📍 {scanLocation.lat.toFixed(5)}, {scanLocation.lng.toFixed(5)}（精度 ±{Math.round(scanLocation.accuracy)}m）
+                </a>
+                <button
+                  type="button"
+                  onClick={() => setShowCoordEdit((v) => !v)}
+                  className="text-[10px] text-muted-foreground/60 shrink-0"
+                >
+                  座標を修正 {showCoordEdit ? '▲' : '▾'}
+                </button>
+              </div>
+              {showCoordEdit && (
+                <div className="flex gap-2">
+                  <div className="flex-1">
+                    <label className="text-[10px] text-muted-foreground">緯度</label>
+                    <input
+                      type="number" step="0.000001"
+                      value={editLat}
+                      onChange={(e) => setEditLat(e.target.value)}
+                      onBlur={handleCoordChange}
+                      className="mt-0.5 w-full rounded-lg bg-background border border-white/10 px-2 py-1.5
+                        text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    />
+                  </div>
+                  <div className="flex-1">
+                    <label className="text-[10px] text-muted-foreground">経度</label>
+                    <input
+                      type="number" step="0.000001"
+                      value={editLng}
+                      onChange={(e) => setEditLng(e.target.value)}
+                      onBlur={handleCoordChange}
+                      className="mt-0.5 w-full rounded-lg bg-background border border-white/10 px-2 py-1.5
+                        text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    />
+                  </div>
+                </div>
+              )}
             </>
           ) : locationStatus === 'loading' ? (
             <p className="text-xs text-muted-foreground">位置情報を取得中...</p>
