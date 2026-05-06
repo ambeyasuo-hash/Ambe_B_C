@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { createClient } from '@supabase/supabase-js'
 import { fromB64, deriveWrappingKeyFromPIN, randomBytes, unwrapKey, wrapKey } from '@/lib/crypto'
 import {
   saveBundleWithPIN,
@@ -122,25 +121,26 @@ export default function QRPairingImport({ onClose }: QRPairingImportProps) {
         return
       }
 
-      // [2] Supabase 接続
-      const supabase = createClient(payload.url, payload.key)
-
-      // [3] ct を取得
-      const { data, error: fetchError } = await supabase
-        .from('qr_transfers')
-        .select('ct')
-        .eq('token', payload.token)
-        .single()
-
-      if (fetchError || !data) {
-        setError('QRコードは無効または既に使用済みです')
+      // [2] ct を取得し、DB側で使用済みにする
+      const consumeRes = await fetch('/api/consume-qr-transfer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          token: payload.token,
+          supabaseUrl: payload.url,
+          supabaseAnonKey: payload.key,
+        }),
+      })
+      const consumeJson = (await consumeRes.json().catch(() => ({}))) as { ct?: string; error?: string }
+      if (!consumeRes.ok || !consumeJson.ct) {
+        setError(consumeJson.error ?? 'QRコードは無効または既に使用済みです')
         return
       }
 
       // [4] salt・iv・ct をデコード
       const saltBytes = fromB64(payload.salt)
       const ivBytes   = fromB64(payload.iv)
-      const ctBytes   = fromB64(data.ct as string)
+      const ctBytes   = fromB64(consumeJson.ct)
 
       // [5] QR PIN で wrapping key を導出して復号
       const wrappingKey = await deriveWrappingKeyFromPIN(pin, saltBytes)
@@ -153,10 +153,7 @@ export default function QRPairingImport({ onClose }: QRPairingImportProps) {
       // [6] ConfigBundle をパース
       const bundle = JSON.parse(new TextDecoder().decode(plainBuf)) as ConfigBundle
 
-      // [7] cleanup: qr_transfers から削除
-      await supabase.from('qr_transfers').delete().eq('token', payload.token)
-
-      // [8] 次ステップへ（アプリ PIN でデータキーを解包するため bundle を保持）
+      // [7] 次ステップへ（アプリ PIN でデータキーを解包するため bundle を保持）
       setDecryptedBundle(bundle)
       setStep('app-pin')
     } catch (e) {

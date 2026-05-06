@@ -27,7 +27,6 @@ export default function QRPairingExport({ bundle, onClose }: QRPairingExportProp
   const [remaining, setRemaining] = useState(EXPIRE_SECONDS)
   const [expired, setExpired] = useState(false)
   const [error, setError] = useState('')
-  const [insertedToken, setInsertedToken] = useState<string | null>(null)
 
   const buildQrPayload = useCallback(async () => {
     try {
@@ -55,8 +54,6 @@ export default function QRPairingExport({ bundle, onClose }: QRPairingExportProp
         setError('サーバーへの保存に失敗しました: ' + insertError.message)
         return
       }
-
-      setInsertedToken(token)
 
       const payload = {
         v: 2,
@@ -93,12 +90,6 @@ export default function QRPairingExport({ bundle, onClose }: QRPairingExportProp
     }, 1000)
     return () => clearInterval(id)
   }, [expired])
-
-  useEffect(() => {
-    if (!expired || !insertedToken) return
-    const supabase = createClient(bundle.supabase.url, bundle.supabase.anon_key)
-    supabase.from('qr_transfers').delete().eq('token', insertedToken)
-  }, [expired, insertedToken, bundle.supabase.url, bundle.supabase.anon_key])
 
   const mm = String(Math.floor(remaining / 60)).padStart(2, '0')
   const ss = String(remaining % 60).padStart(2, '0')

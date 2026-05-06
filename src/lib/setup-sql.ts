@@ -16,6 +16,7 @@ DROP TABLE IF EXISTS user_vault     CASCADE;
 
 -- テーブル削除後に関数を削除
 DROP FUNCTION IF EXISTS update_updated_at() CASCADE;
+DROP FUNCTION IF EXISTS consume_qr_transfer(TEXT) CASCADE;
 
 SELECT 'フォーマット完了。次にセットアップ SQL を実行してください。' AS status;`
 
@@ -75,8 +76,8 @@ CREATE POLICY "business_cards insert active" ON business_cards
   FOR INSERT TO anon WITH CHECK (deleted_at IS NULL);
 CREATE POLICY "business_cards update active" ON business_cards
   FOR UPDATE TO anon USING (deleted_at IS NULL) WITH CHECK (true);
+REVOKE ALL ON business_cards FROM anon;
 GRANT SELECT, INSERT, UPDATE ON business_cards TO anon;
-REVOKE DELETE ON business_cards FROM anon;
 
 CREATE INDEX IF NOT EXISTS idx_bc_encryption_salt ON business_cards (encryption_salt);
 CREATE INDEX IF NOT EXISTS idx_bc_created_at      ON business_cards (created_at DESC);
@@ -107,12 +108,42 @@ CREATE TABLE IF NOT EXISTS qr_transfers (
   ct         TEXT NOT NULL,
   iv         TEXT NOT NULL,
   expires_at TIMESTAMPTZ NOT NULL,
+  used_at    TIMESTAMPTZ,
   created_at TIMESTAMPTZ DEFAULT now()
 );
+ALTER TABLE qr_transfers ADD COLUMN IF NOT EXISTS used_at TIMESTAMPTZ;
 ALTER TABLE qr_transfers ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "anon full access" ON qr_transfers
-  FOR ALL TO anon USING (true) WITH CHECK (true);
-GRANT ALL ON qr_transfers TO anon;
+DROP POLICY IF EXISTS "anon full access" ON qr_transfers;
+DROP POLICY IF EXISTS "qr_transfers insert valid" ON qr_transfers;
+CREATE POLICY "qr_transfers insert valid" ON qr_transfers
+  FOR INSERT TO anon
+  WITH CHECK (
+    used_at IS NULL
+    AND expires_at > now()
+    AND expires_at <= now() + interval '10 minutes'
+  );
+REVOKE ALL ON qr_transfers FROM anon;
+GRANT INSERT ON qr_transfers TO anon;
+
+CREATE OR REPLACE FUNCTION consume_qr_transfer(p_token TEXT)
+RETURNS TABLE (ct TEXT)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  RETURN QUERY
+  UPDATE qr_transfers
+     SET used_at = now()
+   WHERE token = p_token
+     AND used_at IS NULL
+     AND expires_at > now()
+     AND created_at > now() - interval '5 minutes'
+  RETURNING qr_transfers.ct;
+END;
+$$;
+REVOKE ALL ON FUNCTION consume_qr_transfer(TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION consume_qr_transfer(TEXT) TO anon;
 
 -- ⑤ updated_at 自動更新トリガー
 CREATE OR REPLACE FUNCTION update_updated_at()
