@@ -111,7 +111,13 @@ export default function LockScreen({ initialMode }: { initialMode?: LockMode }) 
           try {
             const bundle = await loadBundleWithAlpha(result.wrappingKey)
             const dataKey = await unlockWithAlpha(result.wrappingKey, bundle)
-            handleUnlockWithFadeout(dataKey, bundle)
+            const bundleForUnlock = bundle.search_index_secret
+              ? bundle
+              : { ...bundle, search_index_secret: generateSearchIndexSecret() }
+            if (!bundle.search_index_secret) {
+              await saveBundleWithAlpha(result.wrappingKey, bundleForUnlock)
+            }
+            handleUnlockWithFadeout(dataKey, bundleForUnlock)
             return
           } catch {
             // bundle がまだ PIN key で暗号化されている（初回 PRF ログイン）

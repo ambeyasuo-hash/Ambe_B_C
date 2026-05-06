@@ -11,17 +11,29 @@ import {
   clearAllSetupData,
   type ConfigBundle,
 } from '@/lib/config-bundle'
-import { deriveWrappingKeyFromPIN, unwrapKey, wrapKey, randomBytes } from '@/lib/crypto'
+import { aesDecryptString, deriveWrappingKeyFromPIN, unwrapKey, wrapKey, randomBytes } from '@/lib/crypto'
 import { registerWebAuthn, hasRegisteredCredential, isPrfEnabled } from '@/lib/webauthn'
 import { testSupabaseConnection } from '@/lib/vault'
 import { useRouter } from 'next/navigation'
 import QRPairingExport from '@/components/QRPairingExport'
 import { PinConfirmModal } from '@/components/PinConfirmModal'
 import { SUPABASE_SETUP_SQL } from '@/lib/setup-sql'
+import { getSupabaseClient } from '@/lib/supabase'
+import {
+  buildSearchHashes,
+  buildSearchTokensFromValues,
+  generateSearchIndexSecret,
+} from '@/lib/normalize'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 type TestState = 'idle' | 'testing' | 'ok' | 'error'
+
+interface ReindexCardRow {
+  id: string
+  encrypted_data: string
+  ocr_raw_text: string | null
+}
 
 function AccordionSection({
   title,
@@ -561,6 +573,102 @@ export default function SettingsPage() {
     })
   }, [bundle, dataKey, updateBundle])
 
+  // ── Search index rebuild ─────────────────────────────────────────────────
+
+  const [reindexStatus, setReindexStatus] = useState<'idle' | 'loading' | 'ok' | 'error'>('idle')
+  const [reindexMsg, setReindexMsg] = useState('')
+
+  const handleSearchReindex = useCallback(async () => {
+    if (!bundle || !dataKey) return
+    setReindexStatus('loading')
+    setReindexMsg('')
+    setPinModal({
+      show: true,
+      title: '検索インデックスを再構築するためPINを入力してください',
+      onConfirm: async (pin: string) => {
+        try {
+          if (!pin) return
+          const pinSaltHex = localStorage.getItem('config_bundle_pin_salt')
+          if (!pinSaltHex) throw new Error('PINが見つかりません')
+
+          const currentBundle = await loadBundleWithPIN(pin)
+          const bundleForIndex: ConfigBundle = currentBundle.search_index_secret
+            ? currentBundle
+            : { ...currentBundle, search_index_secret: generateSearchIndexSecret() }
+          const salt = Uint8Array.from(
+            pinSaltHex.match(/.{2}/g)!.map((h: string) => parseInt(h, 16)),
+          ) as unknown as Uint8Array<ArrayBuffer>
+
+          if (!currentBundle.search_index_secret) {
+            await saveBundleWithPIN(pin, bundleForIndex, salt)
+            updateBundle(bundleForIndex)
+          }
+
+          const supabase = getSupabaseClient(bundleForIndex.supabase.url, bundleForIndex.supabase.anon_key)
+          const { data, error } = await supabase
+            .from('business_cards')
+            .select('id, encrypted_data, ocr_raw_text')
+            .eq('encryption_salt', bundleForIndex.encryption_salt)
+
+          if (error) throw new Error(error.message)
+
+          const rows = (data ?? []) as ReindexCardRow[]
+          let updated = 0
+          let failed = 0
+
+          for (const row of rows) {
+            try {
+              const piiJson = await aesDecryptString(dataKey, row.encrypted_data)
+              const pii = JSON.parse(piiJson) as {
+                name?: string
+                furigana?: string
+                company?: string
+                department?: string
+                title?: string
+                email?: string
+                tel?: string
+                mobile?: string
+                address?: string
+              }
+              const tokens = buildSearchTokensFromValues([
+                pii.name,
+                pii.furigana,
+                pii.company,
+                pii.department,
+                pii.title,
+                pii.email,
+                pii.tel,
+                pii.mobile,
+                row.ocr_raw_text,
+              ])
+              const searchHashes = await buildSearchHashes(tokens, bundleForIndex, { includeLegacy: false })
+              const { error: updateError } = await supabase
+                .from('business_cards')
+                .update({ search_hashes: searchHashes })
+                .eq('id', row.id)
+                .eq('encryption_salt', bundleForIndex.encryption_salt)
+              if (updateError) throw new Error(updateError.message)
+              updated += 1
+            } catch {
+              failed += 1
+            }
+          }
+
+          setReindexStatus(failed ? 'error' : 'ok')
+          setReindexMsg(
+            failed
+              ? `${updated}件を再構築しました。${failed}件は復号または更新に失敗しました。`
+              : `${updated}件の検索インデックスを再構築しました。`,
+          )
+          setPinModal(null)
+        } catch (e) {
+          setReindexStatus('error')
+          setReindexMsg(e instanceof Error ? e.message : '再構築に失敗しました')
+        }
+      },
+    })
+  }, [bundle, dataKey, updateBundle])
+
   const handleKeepAliveConfirm = useCallback((checked: boolean) => {
     localStorage.setItem('keep_alive_confirmed', checked ? '1' : '0')
     setKeepAliveConfirmed(checked)
@@ -1077,6 +1185,32 @@ export default function SettingsPage() {
         </div>
       </AccordionSection>
 
+      {/* 検索インデックス */}
+      <AccordionSection title="🔎 検索インデックス">
+        <div className="flex flex-col gap-3">
+          <div className="rounded-xl bg-card border border-white/10 p-3">
+            <p className="text-xs font-semibold text-foreground mb-1">Blind Index を再構築</p>
+            <p className="text-xs text-muted-foreground leading-relaxed">
+              既存の名刺を復号し、端末内の検索用シークレットで検索インデックスを作り直します。
+            </p>
+          </div>
+          <motion.button
+            whileTap={{ scale: 0.97 }}
+            onClick={handleSearchReindex}
+            disabled={reindexStatus === 'loading' || !dataKey}
+            className="w-full py-2.5 rounded-xl bg-card border border-white/20
+              text-foreground text-sm disabled:opacity-40"
+          >
+            {reindexStatus === 'loading' ? '再構築中...' : '検索インデックスを再構築'}
+          </motion.button>
+          {reindexMsg && (
+            <p className={`text-xs ${reindexStatus === 'ok' ? 'text-emerald-400' : 'text-red-400'}`}>
+              {reindexMsg}
+            </p>
+          )}
+        </div>
+      </AccordionSection>
+
       {/* データ管理 */}
       <AccordionSection title="🗑 データ管理" variant="danger">
         <div className="flex flex-col gap-3">
@@ -1130,6 +1264,7 @@ export default function SettingsPage() {
             setPinModal(null)
             setApiSaving(false)
             setAmbeExporting(false)
+            setReindexStatus((status) => status === 'loading' ? 'idle' : status)
           }}
         />
       )}
