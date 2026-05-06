@@ -8,6 +8,7 @@ import { registerWebAuthn } from '@/lib/webauthn'
 import { generateMnemonic24, deriveWrappingKeyFromMnemonic, deriveEncryptionSalt } from '@/lib/mnemonic'
 import { generateDataKey, wrapKey, deriveWrappingKeyFromPIN } from '@/lib/crypto'
 import { saveBundleWithAlpha, saveBundleWithPIN, type ConfigBundle } from '@/lib/config-bundle'
+import { generateSearchIndexSecret } from '@/lib/normalize'
 import { saveVaultRow, testSupabaseConnection } from '@/lib/vault'
 import { useVault } from '@/context/VaultContext'
 import { SUPABASE_SETUP_SQL } from '@/lib/setup-sql'
@@ -179,6 +180,7 @@ export default function SecuritySetup() {
         wrapped_data_key_pin: wrappedPin,
         wrapped_data_key_beta: wrappedBeta,
         pin_salt: pinSaltHex,
+        search_index_secret: generateSearchIndexSecret(),
         userEmail,
         fontSizePreference: 'standard',
       }

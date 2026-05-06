@@ -8,6 +8,7 @@ import {
   saveBundleWithPIN,
   type ConfigBundle,
 } from '@/lib/config-bundle'
+import { generateSearchIndexSecret } from '@/lib/normalize'
 import { useVault } from '@/context/VaultContext'
 import { useRouter } from 'next/navigation'
 
@@ -196,7 +197,11 @@ export default function QRPairingImport({ onClose }: QRPairingImportProps) {
       const newWrappedDataKeyPin = await wrapKey(newPinKey, dataKey)
 
       // wrapped_data_key_pin を更新した bundle を保存
-      const updatedBundle: ConfigBundle = { ...decryptedBundle, wrapped_data_key_pin: newWrappedDataKeyPin }
+      const updatedBundle: ConfigBundle = {
+        ...decryptedBundle,
+        wrapped_data_key_pin: newWrappedDataKeyPin,
+        search_index_secret: decryptedBundle.search_index_secret ?? generateSearchIndexSecret(),
+      }
       await saveBundleWithPIN(appPin, updatedBundle, newPinSalt)
       // ※ saveBundleWithAlpha は呼ばない。WebAuthn PRF 鍵はこの端末未登録のため。
       //    次回生体認証時に LockScreen の PRF upgrade フローが自動処理する。

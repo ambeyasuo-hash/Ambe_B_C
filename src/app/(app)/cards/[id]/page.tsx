@@ -5,10 +5,11 @@ import { useParams, useRouter } from 'next/navigation'
 import { motion, AnimatePresence } from 'framer-motion'
 import { getSupabaseClient } from '@/lib/supabase'
 import { useVault } from '@/context/VaultContext'
-import { aesDecryptString, aesEncryptString, hkdfDerive, hmacIndex } from '@/lib/crypto'
+import { aesDecryptString, aesEncryptString } from '@/lib/crypto'
 import { fetchCategories, type Category } from '@/lib/categories'
 import { reverseGeocode } from '@/lib/geocode'
 import { autoFurigana } from '@/lib/furigana'
+import { buildSearchHashes, buildSearchTokensFromValues } from '@/lib/normalize'
 
 interface CardRow {
   id: string
@@ -259,19 +260,17 @@ export default function CardDetailPage() {
       })
       const encryptedData = await aesEncryptString(dataKey, piiJson)
 
-      const hmacKeyBytes = await hkdfDerive(
-        new TextEncoder().encode(bundle.encryption_salt),
-        'blind-index-hmac',
-        32,
-      )
-      const rawTokens = [
-        editFields.name, editFields.company, editFields.title,
-        editFields.email, editFields.tel,
-      ]
-        .filter(Boolean)
-        .flatMap((s) => s.toLowerCase().split(/\s+/).filter((t) => t.length > 1))
-      const uniqueTokens = [...new Set(rawTokens)]
-      const searchHashes = await Promise.all(uniqueTokens.map((t) => hmacIndex(hmacKeyBytes, t)))
+      const uniqueTokens = buildSearchTokensFromValues([
+        editFields.name,
+        editFields.furigana,
+        editFields.company,
+        editFields.department,
+        editFields.title,
+        editFields.email,
+        editFields.tel,
+        editFields.mobile,
+      ])
+      const searchHashes = await buildSearchHashes(uniqueTokens, bundle, { includeLegacy: false })
 
       const supabase = getSupabaseClient(bundle.supabase.url, bundle.supabase.anon_key)
       const { error: updateError } = await supabase
@@ -283,6 +282,7 @@ export default function CardDetailPage() {
           card_category: newCardCategory,
         })
         .eq('id', id)
+        .eq('encryption_salt', bundle.encryption_salt)
 
       if (updateError) throw new Error(updateError.message)
 
@@ -306,7 +306,11 @@ export default function CardDetailPage() {
     setIsDeleting(true)
     try {
       const supabase = getSupabaseClient(bundle.supabase.url, bundle.supabase.anon_key)
-      const { error: deleteError } = await supabase.from('business_cards').delete().eq('id', id)
+      const { error: deleteError } = await supabase
+        .from('business_cards')
+        .delete()
+        .eq('id', id)
+        .eq('encryption_salt', bundle.encryption_salt)
       if (deleteError) throw new Error(deleteError.message)
       router.push('/cards')
     } catch (e) {
@@ -371,6 +375,7 @@ export default function CardDetailPage() {
         .from('business_cards')
         .update({ thank_you_sent: true, thank_you_sent_at: new Date().toISOString() })
         .eq('id', id)
+        .eq('encryption_salt', bundle.encryption_salt)
       if (updateError) throw new Error(updateError.message)
       setCard((prev) => prev ? {
         ...prev,

@@ -15,6 +15,7 @@ export interface ConfigBundle {
   wrapped_data_key_alpha: string   // WebAuthn PRF 由来鍵で wrap
   wrapped_data_key_pin: string     // PIN 由来鍵で wrap (Level 1b)
   wrapped_data_key_beta: string    // Mnemonic 由来鍵で wrap (Level 2)
+  search_index_secret?: string     // Blind Index HMAC 用のクライアント側秘密値
   /** PIN wrapping salt (hex). .ambe インポート時に pin_salt が分かるようバンドル内に保持 */
   pin_salt?: string
   userEmail: string

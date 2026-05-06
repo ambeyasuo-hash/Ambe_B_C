@@ -5,8 +5,9 @@ import { useRouter } from 'next/navigation'
 import { motion, AnimatePresence } from 'framer-motion'
 import { getSupabaseClient } from '@/lib/supabase'
 import { useVault } from '@/context/VaultContext'
-import { aesDecryptString, hkdfDerive, hmacIndex } from '@/lib/crypto'
+import { aesDecryptString } from '@/lib/crypto'
 import { fetchCategories, createCategory, type Category } from '@/lib/categories'
+import { buildSearchHashesOrFilter, buildSearchQueryHashes } from '@/lib/normalize'
 
 type SortKey = 'date_desc' | 'date_asc' | 'name_asc' | 'company_asc'
 
@@ -111,13 +112,12 @@ export default function CardsPage() {
         .eq('encryption_salt', bundle.encryption_salt)
 
       if (debouncedQuery.trim()) {
-        const hmacKeyBytes = await hkdfDerive(
-          new TextEncoder().encode(bundle.encryption_salt),
-          'blind-index-hmac',
-          32,
-        )
-        const hash = await hmacIndex(hmacKeyBytes, debouncedQuery.trim().toLowerCase())
-        query = query.contains('search_hashes', [hash])
+        const hashes = await buildSearchQueryHashes(debouncedQuery.trim(), bundle)
+        if (hashes.length === 1) {
+          query = query.contains('search_hashes', [hashes[0]])
+        } else if (hashes.length > 1) {
+          query = query.or(buildSearchHashesOrFilter(hashes))
+        }
       }
 
       if (selectedCategory !== 'すべて') {

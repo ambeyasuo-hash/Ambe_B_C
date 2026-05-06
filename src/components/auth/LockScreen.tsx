@@ -16,6 +16,7 @@ import {
 import { unlockWithAlpha } from '@/lib/vault'
 import { useVault } from '@/context/VaultContext'
 import { validateMnemonic24, deriveWrappingKeyFromMnemonic, deriveEncryptionSalt } from '@/lib/mnemonic'
+import { generateSearchIndexSecret } from '@/lib/normalize'
 import QRPairingImport from '@/components/QRPairingImport'
 
 type LockMode = 'biometric' | 'pin' | 'reset' | 'ambe' | 'mnemonic' | 'qr-import'
@@ -156,21 +157,31 @@ export default function LockScreen({ initialMode }: { initialMode?: LockMode }) 
       const salt = Uint8Array.from(saltHex.match(/.{2}/g)!.map((h) => parseInt(h, 16)))
       const pinKey = await deriveWrappingKeyFromPIN(pin, salt)
       const dataKey = await unwrapKey(pinKey, bundle.wrapped_data_key_pin)
+      let bundleForUnlock = bundle
+
+      if (!bundleForUnlock.search_index_secret) {
+        bundleForUnlock = {
+          ...bundleForUnlock,
+          search_index_secret: generateSearchIndexSecret(),
+        }
+        await saveBundleWithPIN(pin, bundleForUnlock, salt)
+      }
 
       // PRF アップグレード: 初回 PIN ログイン後に bundle を PRF key で再暗号化
       if (pendingPrfKey.current) {
         try {
           const { wrapKey } = await import('@/lib/crypto')
           const rewrappedAlpha = await wrapKey(pendingPrfKey.current, dataKey)
-          const upgradedBundle = { ...bundle, wrapped_data_key_alpha: rewrappedAlpha }
+          const upgradedBundle = { ...bundleForUnlock, wrapped_data_key_alpha: rewrappedAlpha }
           await saveBundleWithAlpha(pendingPrfKey.current, upgradedBundle)
+          bundleForUnlock = upgradedBundle
           pendingPrfKey.current = null
         } catch {
           // アップグレード失敗は致命的ではない
         }
       }
 
-      unlock(dataKey, bundle)
+      unlock(dataKey, bundleForUnlock)
     } catch {
       setError('PINが正しくありません')
       setPin('')
@@ -197,9 +208,12 @@ export default function LockScreen({ initialMode }: { initialMode?: LockMode }) 
     try {
       // 1. .ambe ファイルを ambe エクスポート PIN で復号
       const bundle = await importAmbeFile(ambeExportPin, ambeContent)
+      const bundleForRestore = bundle.search_index_secret
+        ? bundle
+        : { ...bundle, search_index_secret: generateSearchIndexSecret() }
 
       // 2. bundle 内の pin_salt を使って Data Key を復元
-      const saltHex = bundle.pin_salt
+      const saltHex = bundleForRestore.pin_salt
       if (!saltHex) {
         setError('この .ambe ファイルは古い形式です。24単語リカバリをお使いください。')
         return
@@ -208,14 +222,14 @@ export default function LockScreen({ initialMode }: { initialMode?: LockMode }) 
       const { deriveWrappingKeyFromPIN, unwrapKey } = await import('@/lib/crypto')
       const salt = Uint8Array.from(saltHex.match(/.{2}/g)!.map((h) => parseInt(h, 16)))
       const pinKey = await deriveWrappingKeyFromPIN(ambeAppPin, salt)
-      const dataKey = await unwrapKey(pinKey, bundle.wrapped_data_key_pin)
+      const dataKey = await unwrapKey(pinKey, bundleForRestore.wrapped_data_key_pin)
 
       // 3. localStorage に復元して保存
       const saltTyped = new Uint8Array(salt.buffer.slice(salt.byteOffset, salt.byteOffset + salt.byteLength)) as Uint8Array<ArrayBuffer>
-      await saveBundleWithPIN(ambeAppPin, bundle, saltTyped)
-      await saveBundleWithAlpha(pinKey, bundle)  // alpha = pin key（次回ログイン時に PRF Upgrade）
+      await saveBundleWithPIN(ambeAppPin, bundleForRestore, saltTyped)
+      await saveBundleWithAlpha(pinKey, bundleForRestore)  // alpha = pin key（次回ログイン時に PRF Upgrade）
 
-      unlock(dataKey, bundle)
+      unlock(dataKey, bundleForRestore)
     } catch (e) {
       const msg = e instanceof Error ? e.message : ''
       if (msg.includes('decrypt') || msg.includes('OperationError') || msg.includes('復号')) {
@@ -318,6 +332,7 @@ export default function LockScreen({ initialMode }: { initialMode?: LockMode }) 
         wrapped_data_key_pin: newWrappedPin,
         wrapped_data_key_beta: newWrappedBeta,
         pin_salt: pinSaltHex,
+        search_index_secret: generateSearchIndexSecret(),
         userEmail: '',
         fontSizePreference: 'standard',
       }

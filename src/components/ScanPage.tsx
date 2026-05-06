@@ -9,8 +9,8 @@ import {
   analyzeBusinessCardBack,
   type BusinessCardOcrResult,
 } from '@/lib/azure-ocr'
-import { aesEncryptString, hkdfDerive, hmacIndex } from '@/lib/crypto'
-import { buildSearchTokens } from '@/lib/normalize'
+import { aesEncryptString } from '@/lib/crypto'
+import { buildSearchHashes, buildSearchTokens } from '@/lib/normalize'
 import { fetchCategories, createCategory, type Category } from '@/lib/categories'
 import { reverseGeocode } from '@/lib/geocode'
 import { autoFurigana } from '@/lib/furigana'
@@ -453,13 +453,8 @@ export default function ScanPage() {
         : null
 
       // [3] Blind indexing via HMAC-SHA256
-      const hmacKeyBytes = await hkdfDerive(
-        new TextEncoder().encode(bundle.encryption_salt),
-        'blind-index-hmac',
-        32,
-      )
       const tokens = ocrResult ? buildSearchTokens(ocrResult) : []
-      const search_hashes = await Promise.all(tokens.map((t) => hmacIndex(hmacKeyBytes, t)))
+      const search_hashes = await buildSearchHashes(tokens, bundle, { includeLegacy: false })
 
       // [4] Resolve category name (system-default → null = 未分類)
       const selectedCat = categories.find((c) => c.id === selectedCategoryId)
