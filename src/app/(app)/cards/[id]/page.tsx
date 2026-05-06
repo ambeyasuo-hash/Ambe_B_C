@@ -136,6 +136,7 @@ export default function CardDetailPage() {
         .select('id, encrypted_data, encrypted_thumbnail_front, encrypted_thumbnail_back, card_category, thank_you_sent, thank_you_sent_at, scanned_at, industry_category, notes')
         .eq('id', id)
         .eq('encryption_salt', bundle.encryption_salt)
+        .is('deleted_at', null)
         .single()
 
       if (fetchError) throw new Error(fetchError.message)
@@ -305,13 +306,21 @@ export default function CardDetailPage() {
     if (!bundle) return
     setIsDeleting(true)
     try {
-      const supabase = getSupabaseClient(bundle.supabase.url, bundle.supabase.anon_key)
-      const { error: deleteError } = await supabase
-        .from('business_cards')
-        .delete()
-        .eq('id', id)
-        .eq('encryption_salt', bundle.encryption_salt)
-      if (deleteError) throw new Error(deleteError.message)
+      const res = await fetch('/api/delete-business-card', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id,
+          encryption_salt: bundle.encryption_salt,
+          supabaseUrl: bundle.supabase.url,
+          supabaseAnonKey: bundle.supabase.anon_key,
+          userEmail: bundle.userEmail,
+        }),
+      })
+      if (!res.ok) {
+        const err = (await res.json().catch(() => ({}))) as { error?: string }
+        throw new Error(err.error ?? '削除に失敗しました')
+      }
       router.push('/cards')
     } catch (e) {
       setError(e instanceof Error ? e.message : '削除に失敗しました')

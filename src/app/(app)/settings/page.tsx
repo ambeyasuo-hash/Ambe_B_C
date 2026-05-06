@@ -609,6 +609,7 @@ export default function SettingsPage() {
             .from('business_cards')
             .select('id, encrypted_data, ocr_raw_text')
             .eq('encryption_salt', bundleForIndex.encryption_salt)
+            .is('deleted_at', null)
 
           if (error) throw new Error(error.message)
 

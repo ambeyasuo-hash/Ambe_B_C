@@ -60,18 +60,30 @@ CREATE TABLE IF NOT EXISTS business_cards (
   scanned_at                TIMESTAMPTZ,
   ocr_confidence            FLOAT,
   thank_you_sent            BOOLEAN NOT NULL DEFAULT false,
-  thank_you_sent_at         TIMESTAMPTZ
+  thank_you_sent_at         TIMESTAMPTZ,
+  deleted_at                TIMESTAMPTZ
 );
+ALTER TABLE business_cards ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
 ALTER TABLE business_cards ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "anon full access" ON business_cards
-  FOR ALL TO anon USING (true) WITH CHECK (true);
-GRANT ALL ON business_cards TO anon;
+DROP POLICY IF EXISTS "anon full access" ON business_cards;
+DROP POLICY IF EXISTS "business_cards select active" ON business_cards;
+DROP POLICY IF EXISTS "business_cards insert active" ON business_cards;
+DROP POLICY IF EXISTS "business_cards update active" ON business_cards;
+CREATE POLICY "business_cards select active" ON business_cards
+  FOR SELECT TO anon USING (deleted_at IS NULL);
+CREATE POLICY "business_cards insert active" ON business_cards
+  FOR INSERT TO anon WITH CHECK (deleted_at IS NULL);
+CREATE POLICY "business_cards update active" ON business_cards
+  FOR UPDATE TO anon USING (deleted_at IS NULL) WITH CHECK (true);
+GRANT SELECT, INSERT, UPDATE ON business_cards TO anon;
+REVOKE DELETE ON business_cards FROM anon;
 
 CREATE INDEX IF NOT EXISTS idx_bc_encryption_salt ON business_cards (encryption_salt);
 CREATE INDEX IF NOT EXISTS idx_bc_created_at      ON business_cards (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_bc_search_hashes   ON business_cards USING GIN (search_hashes);
 CREATE INDEX IF NOT EXISTS idx_bc_card_category   ON business_cards (card_category);
 CREATE INDEX IF NOT EXISTS idx_bc_industry        ON business_cards (industry_category);
+CREATE INDEX IF NOT EXISTS idx_bc_active_salt     ON business_cards (encryption_salt, deleted_at);
 
 -- ③ categories テーブル（ユーザー定義カテゴリ）
 CREATE TABLE IF NOT EXISTS categories (

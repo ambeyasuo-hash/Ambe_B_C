@@ -110,6 +110,7 @@ export default function CardsPage() {
         .from('business_cards')
         .select('id, encrypted_data, encrypted_thumbnail_front, card_category, thank_you_sent, scanned_at')
         .eq('encryption_salt', bundle.encryption_salt)
+        .is('deleted_at', null)
 
       if (debouncedQuery.trim()) {
         const hashes = await buildSearchQueryHashes(debouncedQuery.trim(), bundle)
