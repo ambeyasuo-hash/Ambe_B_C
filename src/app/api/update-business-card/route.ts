@@ -95,26 +95,30 @@ export async function POST(request: Request) {
         return Response.json({ error: 'INVALID_DETAILS_UPDATE' }, { status: 400 })
       }
 
-      const { error } = await supabase
-        .from('business_cards')
-        .update({
-          encrypted_data,
-          search_hashes,
-          notes: notes ?? null,
-          card_category: card_category ?? null,
-        })
-        .eq('id', id)
-        .eq('encryption_salt', encryption_salt)
-        .is('deleted_at', null)
+      const { data: replacementId, error } = await supabase.rpc('replace_business_card_details', {
+        p_id: id,
+        p_encryption_salt: encryption_salt,
+        p_encrypted_data: encrypted_data,
+        p_search_hashes: search_hashes,
+        p_notes: notes ?? null,
+        p_card_category: card_category ?? null,
+      })
 
       if (error) {
+        if (error.message.includes('CARD_NOT_FOUND')) {
+          return Response.json({ error: 'CARD_NOT_FOUND' }, { status: 404 })
+        }
         return Response.json(
           { error: `Supabase update error: ${error.message}` },
           { status: 500 },
         )
       }
 
-      return Response.json({ ok: true })
+      if (typeof replacementId !== 'string') {
+        return Response.json({ error: 'CARD_REPLACEMENT_FAILED' }, { status: 500 })
+      }
+
+      return Response.json({ ok: true, id: replacementId })
     }
 
     const thankYouSentAt = new Date().toISOString()

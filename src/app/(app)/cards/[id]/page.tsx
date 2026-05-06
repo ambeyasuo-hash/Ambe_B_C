@@ -289,25 +289,28 @@ export default function CardDetailPage() {
           userEmail: bundle.userEmail,
         }),
       })
+      const json = (await res.json().catch(() => ({}))) as { error?: string; id?: string }
       if (!res.ok) {
-        const err = (await res.json().catch(() => ({}))) as { error?: string }
+        const err = json
         throw new Error(err.error ?? '保存に失敗しました')
       }
+      const nextId = json.id ?? id
 
       setCard((prev) => prev ? {
         ...prev,
         pii: { name: editFields.name, furigana: editFields.furigana, company: editFields.company, department: editFields.department, title: editFields.title, email: editFields.email, tel: editFields.tel, mobile: editFields.mobile, address: editFields.address },
-        row: { ...prev.row, notes: editFields.notes || null, card_category: newCardCategory },
+        row: { ...prev.row, id: nextId, notes: editFields.notes || null, card_category: newCardCategory },
         scanLocation: updatedLocation,
       } : null)
       setIsEditing(false)
+      if (nextId !== id) router.replace(`/cards/${nextId}`)
       setToastMsg('保存しました')
     } catch (e) {
       setSaveError(e instanceof Error ? e.message : '保存に失敗しました')
     } finally {
       setIsSaving(false)
     }
-  }, [dataKey, bundle, card, editFields, id, editCategoryId, categories, editLocLat, editLocLng])
+  }, [dataKey, bundle, card, editFields, id, editCategoryId, categories, editLocLat, editLocLng, router])
 
   const handleDelete = useCallback(async () => {
     if (!bundle) return

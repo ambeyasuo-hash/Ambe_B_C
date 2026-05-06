@@ -16,6 +16,7 @@ DROP TABLE IF EXISTS user_vault     CASCADE;
 
 -- テーブル削除後に関数を削除
 DROP FUNCTION IF EXISTS update_updated_at() CASCADE;
+DROP FUNCTION IF EXISTS replace_business_card_details(UUID, TEXT, TEXT, TEXT[], TEXT, TEXT) CASCADE;
 DROP FUNCTION IF EXISTS consume_qr_transfer(TEXT) CASCADE;
 
 SELECT 'フォーマット完了。次にセットアップ SQL を実行してください。' AS status;`
@@ -77,7 +78,8 @@ CREATE POLICY "business_cards insert active" ON business_cards
 CREATE POLICY "business_cards update active" ON business_cards
   FOR UPDATE TO anon USING (deleted_at IS NULL) WITH CHECK (true);
 REVOKE ALL ON business_cards FROM anon;
-GRANT SELECT, INSERT, UPDATE ON business_cards TO anon;
+GRANT SELECT, INSERT ON business_cards TO anon;
+GRANT UPDATE (card_category, notes, thank_you_sent, thank_you_sent_at, deleted_at) ON business_cards TO anon;
 
 CREATE INDEX IF NOT EXISTS idx_bc_encryption_salt ON business_cards (encryption_salt);
 CREATE INDEX IF NOT EXISTS idx_bc_created_at      ON business_cards (created_at DESC);
@@ -85,6 +87,76 @@ CREATE INDEX IF NOT EXISTS idx_bc_search_hashes   ON business_cards USING GIN (s
 CREATE INDEX IF NOT EXISTS idx_bc_card_category   ON business_cards (card_category);
 CREATE INDEX IF NOT EXISTS idx_bc_industry        ON business_cards (industry_category);
 CREATE INDEX IF NOT EXISTS idx_bc_active_salt     ON business_cards (encryption_salt, deleted_at);
+
+CREATE OR REPLACE FUNCTION replace_business_card_details(
+  p_id UUID,
+  p_encryption_salt TEXT,
+  p_encrypted_data TEXT,
+  p_search_hashes TEXT[],
+  p_notes TEXT,
+  p_card_category TEXT
+)
+RETURNS UUID
+LANGUAGE plpgsql
+SET search_path = public
+AS $$
+DECLARE
+  v_new_id UUID;
+BEGIN
+  INSERT INTO business_cards (
+    encrypted_data,
+    encrypted_thumbnail_front,
+    encrypted_thumbnail_back,
+    search_hashes,
+    industry_category,
+    card_category,
+    attributes,
+    notes,
+    ocr_raw_text,
+    encryption_salt,
+    encryption_key_id,
+    scanned_at,
+    ocr_confidence,
+    thank_you_sent,
+    thank_you_sent_at
+  )
+  SELECT
+    p_encrypted_data,
+    encrypted_thumbnail_front,
+    encrypted_thumbnail_back,
+    p_search_hashes,
+    industry_category,
+    p_card_category,
+    attributes,
+    p_notes,
+    ocr_raw_text,
+    encryption_salt,
+    encryption_key_id,
+    scanned_at,
+    ocr_confidence,
+    thank_you_sent,
+    thank_you_sent_at
+  FROM business_cards
+  WHERE id = p_id
+    AND encryption_salt = p_encryption_salt
+    AND deleted_at IS NULL
+  RETURNING id INTO v_new_id;
+
+  IF v_new_id IS NULL THEN
+    RAISE EXCEPTION 'CARD_NOT_FOUND' USING ERRCODE = 'P0002';
+  END IF;
+
+  UPDATE business_cards
+     SET deleted_at = now()
+   WHERE id = p_id
+     AND encryption_salt = p_encryption_salt
+     AND deleted_at IS NULL;
+
+  RETURN v_new_id;
+END;
+$$;
+REVOKE ALL ON FUNCTION replace_business_card_details(UUID, TEXT, TEXT, TEXT[], TEXT, TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION replace_business_card_details(UUID, TEXT, TEXT, TEXT[], TEXT, TEXT) TO anon;
 
 -- ③ categories テーブル（ユーザー定義カテゴリ）
 CREATE TABLE IF NOT EXISTS categories (
