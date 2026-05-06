@@ -273,19 +273,26 @@ export default function CardDetailPage() {
       ])
       const searchHashes = await buildSearchHashes(uniqueTokens, bundle, { includeLegacy: false })
 
-      const supabase = getSupabaseClient(bundle.supabase.url, bundle.supabase.anon_key)
-      const { error: updateError } = await supabase
-        .from('business_cards')
-        .update({
+      const res = await fetch('/api/update-business-card', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          kind: 'details',
+          id,
+          encryption_salt: bundle.encryption_salt,
+          supabaseUrl: bundle.supabase.url,
+          supabaseAnonKey: bundle.supabase.anon_key,
           encrypted_data: encryptedData,
           search_hashes: searchHashes,
           notes: editFields.notes || null,
           card_category: newCardCategory,
-        })
-        .eq('id', id)
-        .eq('encryption_salt', bundle.encryption_salt)
-
-      if (updateError) throw new Error(updateError.message)
+          userEmail: bundle.userEmail,
+        }),
+      })
+      if (!res.ok) {
+        const err = (await res.json().catch(() => ({}))) as { error?: string }
+        throw new Error(err.error ?? '保存に失敗しました')
+      }
 
       setCard((prev) => prev ? {
         ...prev,
@@ -379,16 +386,27 @@ export default function CardDetailPage() {
     if (!bundle || !card) return
     setIsSendingThankYou(true)
     try {
-      const supabase = getSupabaseClient(bundle.supabase.url, bundle.supabase.anon_key)
-      const { error: updateError } = await supabase
-        .from('business_cards')
-        .update({ thank_you_sent: true, thank_you_sent_at: new Date().toISOString() })
-        .eq('id', id)
-        .eq('encryption_salt', bundle.encryption_salt)
-      if (updateError) throw new Error(updateError.message)
+      const res = await fetch('/api/update-business-card', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          kind: 'thank_you',
+          id,
+          encryption_salt: bundle.encryption_salt,
+          supabaseUrl: bundle.supabase.url,
+          supabaseAnonKey: bundle.supabase.anon_key,
+          userEmail: bundle.userEmail,
+        }),
+      })
+      const json = (await res.json().catch(() => ({}))) as {
+        error?: string
+        thank_you_sent_at?: string
+      }
+      if (!res.ok) throw new Error(json.error ?? '更新に失敗しました')
+      const thankYouSentAt = json.thank_you_sent_at ?? new Date().toISOString()
       setCard((prev) => prev ? {
         ...prev,
-        row: { ...prev.row, thank_you_sent: true, thank_you_sent_at: new Date().toISOString() },
+        row: { ...prev.row, thank_you_sent: true, thank_you_sent_at: thankYouSentAt },
       } : null)
       setToastMsg('送信済みにしました')
     } catch (e) {
