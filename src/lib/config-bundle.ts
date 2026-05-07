@@ -19,6 +19,7 @@ export interface ConfigBundle {
   /** PIN wrapping salt (hex). .ambe インポート時に pin_salt が分かるようバンドル内に保持 */
   pin_salt?: string
   userEmail: string
+  vault_generation?: number
   fontSizePreference: 'small' | 'standard' | 'large' | 'xlarge'
 }
 

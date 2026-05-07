@@ -22,8 +22,8 @@ import { getSupabaseClient } from '@/lib/supabase'
 import {
   buildSearchHashes,
   buildSearchTokensFromValues,
-  generateSearchIndexSecret,
 } from '@/lib/normalize'
+import { ensureFreshBundle } from '@/lib/bundle-health'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -602,14 +602,18 @@ export default function SettingsPage() {
           if (!pinSaltHex) throw new Error('PINが見つかりません')
 
           const currentBundle = await loadBundleWithPIN(pin)
-          const bundleForIndex: ConfigBundle = currentBundle.search_index_secret
-            ? currentBundle
-            : { ...currentBundle, search_index_secret: generateSearchIndexSecret() }
+          const freshResult = await ensureFreshBundle(currentBundle)
+          if (freshResult.status === 'KEY_MISMATCH') throw new Error('保存済みVaultと端末設定の暗号saltが一致しません')
+          if (freshResult.status === 'REMOTE_VAULT_MISSING') throw new Error('保存済みVaultが見つかりません')
+          if (freshResult.status === 'CONFIG_CONNECTION_FAILED') throw new Error(freshResult.error ?? 'Vaultの確認に失敗しました')
+          if (freshResult.status === 'STALE_BUNDLE') throw new Error('この端末の設定が古くなっています。再同期または復旧を行ってください')
+          if (freshResult.status === 'MISSING_LOCAL_FIELDS') throw new Error('端末内の設定情報が不足しています。再同期または復旧を行ってください')
+          const bundleForIndex: ConfigBundle = freshResult.bundle
           const salt = Uint8Array.from(
             pinSaltHex.match(/.{2}/g)!.map((h: string) => parseInt(h, 16)),
           ) as unknown as Uint8Array<ArrayBuffer>
 
-          if (!currentBundle.search_index_secret) {
+          if (freshResult.changed) {
             await saveBundleWithPIN(pin, bundleForIndex, salt)
             updateBundle(bundleForIndex)
           }
