@@ -11,6 +11,8 @@ import { generateSearchIndexSecret } from '@/lib/normalize'
 import { useVault } from '@/context/VaultContext'
 import { useRouter } from 'next/navigation'
 
+const SUPABASE_JWT_HEADER = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9'
+
 // step 'pin'    : QR ペアリング PIN（PC 画面に表示されたランダム6桁）
 //                  → Supabase の暗号文を復号してバンドルを取得
 // step 'app-pin': アプリ PIN（元端末でセットアップ時に設定した本人のPIN）
@@ -26,13 +28,46 @@ interface QrPayload {
   url: string
   key: string
   exp?: string
+  compact?: boolean
 }
 
 interface QRPairingImportProps {
   onClose?: () => void
 }
 
+function fromB64Url(s: string): Uint8Array<ArrayBuffer> {
+  const b64 = s.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(s.length / 4) * 4, '=')
+  return fromB64(b64)
+}
+
+function expandAnonKey(keyPart: string): string {
+  return keyPart.split('.').length === 3 ? keyPart : `${SUPABASE_JWT_HEADER}.${keyPart}`
+}
+
+function supabaseUrlFromAnonKey(key: string): string | null {
+  try {
+    const payloadPart = key.split('.')[1]
+    if (!payloadPart) return null
+    const payload = JSON.parse(new TextDecoder().decode(fromB64Url(payloadPart))) as { ref?: unknown }
+    return typeof payload.ref === 'string' && /^[a-z0-9-]+$/.test(payload.ref)
+      ? `https://${payload.ref}.supabase.co`
+      : null
+  } catch {
+    return null
+  }
+}
+
 function parseQrPayload(text: string): QrPayload | null {
+  if (text.startsWith('AMBE4|')) {
+    const [kind, token, salt, iv, keyPart] = text.split('|')
+    const key = expandAnonKey(keyPart ?? '')
+    const url = supabaseUrlFromAnonKey(key)
+    if (kind === 'AMBE4' && token && salt && iv && url && keyPart) {
+      return { v: 4, kind: 'qr-relay', token, salt, iv, url, key, compact: true }
+    }
+    return null
+  }
+
   if (text.startsWith('AMBE3|')) {
     const [kind, token, salt, iv, url, key] = text.split('|')
     if (kind === 'AMBE3' && token && salt && iv && url && key) {
@@ -74,11 +109,19 @@ export default function QRPairingImport({ onClose }: QRPairingImportProps) {
     async function startCamera() {
       try {
         const { BrowserQRCodeReader } = await import('@zxing/browser')
-        const reader = new BrowserQRCodeReader()
+        const reader = new BrowserQRCodeReader(undefined, { delayBetweenScanAttempts: 100 })
 
         if (!videoRef.current) return
 
-        const controls = await reader.decodeFromVideoDevice(undefined, videoRef.current, (result, err) => {
+        const constraints: MediaStreamConstraints = {
+          video: {
+            facingMode: { ideal: 'environment' },
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
+          },
+        }
+
+        const controls = await reader.decodeFromConstraints(constraints, videoRef.current, (result, err) => {
           if (cancelled) return
           if (result) {
             try {
@@ -152,8 +195,9 @@ export default function QRPairingImport({ onClose }: QRPairingImportProps) {
       }
 
       // [4] salt・iv・ct をデコード
-      const saltBytes = fromB64(payload.salt)
-      const ivBytes   = fromB64(payload.iv)
+      const decodePayloadB64 = payload.compact ? fromB64Url : fromB64
+      const saltBytes = decodePayloadB64(payload.salt)
+      const ivBytes   = decodePayloadB64(payload.iv)
       const ctBytes   = fromB64(consumeJson.ct)
 
       // [5] QR PIN で wrapping key を導出して復号

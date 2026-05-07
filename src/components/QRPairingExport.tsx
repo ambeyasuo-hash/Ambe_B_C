@@ -8,6 +8,7 @@ import { randomBytes, deriveWrappingKeyFromPIN, toB64 } from '@/lib/crypto'
 import type { ConfigBundle } from '@/lib/config-bundle'
 
 const EXPIRE_SECONDS = 300
+const SUPABASE_JWT_HEADER = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9'
 
 function generatePin(): string {
   const buf = new Uint8Array(new ArrayBuffer(4))
@@ -16,8 +17,27 @@ function generatePin(): string {
   return num.toString().padStart(6, '0')
 }
 
-function toHex(bytes: Uint8Array): string {
-  return Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('')
+function toB64Url(buf: ArrayBuffer): string {
+  return toB64(buf).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '')
+}
+
+function compactAnonKey(key: string): string {
+  const prefix = `${SUPABASE_JWT_HEADER}.`
+  return key.startsWith(prefix) ? key.slice(prefix.length) : key
+}
+
+function supabaseUrlFromAnonKey(key: string): string | null {
+  try {
+    const payloadPart = key.split('.')[1]
+    if (!payloadPart) return null
+    const padded = payloadPart.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(payloadPart.length / 4) * 4, '=')
+    const payload = JSON.parse(atob(padded)) as { ref?: unknown }
+    return typeof payload.ref === 'string' && /^[a-z0-9-]+$/.test(payload.ref)
+      ? `https://${payload.ref}.supabase.co`
+      : null
+  } catch {
+    return null
+  }
 }
 
 interface QRPairingExportProps {
@@ -41,7 +61,7 @@ export default function QRPairingExport({ bundle, onClose }: QRPairingExportProp
       const plaintext = new TextEncoder().encode(JSON.stringify(bundle))
       const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, wrappingKey, plaintext)
 
-      const token = toHex(randomBytes(16))
+      const token = toB64Url(randomBytes(16).buffer)
       const expiresAt = new Date(Date.now() + EXPIRE_SECONDS * 1000)
 
       const supabase = createClient(bundle.supabase.url, bundle.supabase.anon_key)
@@ -59,14 +79,23 @@ export default function QRPairingExport({ bundle, onClose }: QRPairingExportProp
         return
       }
 
-      setQrData([
-        'AMBE3',
-        token,
-        toB64(salt.buffer),
-        toB64(iv.buffer),
-        bundle.supabase.url,
-        bundle.supabase.anon_key,
-      ].join('|'))
+      const inferredUrl = supabaseUrlFromAnonKey(bundle.supabase.anon_key)
+      setQrData(inferredUrl
+        ? [
+            'AMBE4',
+            token,
+            toB64Url(salt.buffer),
+            toB64Url(iv.buffer),
+            compactAnonKey(bundle.supabase.anon_key),
+          ].join('|')
+        : [
+            'AMBE3',
+            token,
+            toB64(salt.buffer),
+            toB64(iv.buffer),
+            bundle.supabase.url,
+            bundle.supabase.anon_key,
+          ].join('|'))
     } catch (e) {
       setError(e instanceof Error ? e.message : 'QR生成に失敗しました')
     }
@@ -95,7 +124,7 @@ export default function QRPairingExport({ bundle, onClose }: QRPairingExportProp
   const mm = String(Math.floor(remaining / 60)).padStart(2, '0')
   const ss = String(remaining % 60).padStart(2, '0')
   const pinDigits = pin.split('')
-  const qrBoxStyle = { width: 'min(280px, calc(92vw - 56px))', height: 'min(280px, calc(92vw - 56px))' }
+  const qrBoxStyle = { width: 'min(330px, calc(96vw - 48px))', height: 'min(330px, calc(96vw - 48px))' }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center"
@@ -103,8 +132,8 @@ export default function QRPairingExport({ bundle, onClose }: QRPairingExportProp
       <motion.div
         initial={{ scale: 0.9, opacity: 0 }}
         animate={{ scale: 1, opacity: 1 }}
-        className="flex flex-col items-center gap-5 rounded-3xl p-5"
-        style={{ background: 'var(--card)', border: '1px solid var(--border)', width: 'min(92vw, 380px)' }}
+        className="flex flex-col items-center gap-5 rounded-3xl p-4"
+        style={{ background: 'var(--card)', border: '1px solid var(--border)', width: 'min(96vw, 390px)' }}
       >
         <h2 className="text-base font-bold" style={{ color: 'var(--foreground)' }}>
           別端末でスキャン
@@ -120,7 +149,7 @@ export default function QRPairingExport({ bundle, onClose }: QRPairingExportProp
             </div>
           ) : qrData ? (
             <div style={qrBoxStyle}>
-              <QRCodeSVG value={qrData} size={280} level="L" marginSize={2} className="w-full h-full" />
+              <QRCodeSVG value={qrData} size={330} level="L" marginSize={2} className="w-full h-full" />
             </div>
           ) : error ? (
             <div className="flex items-center justify-center" style={qrBoxStyle}>
