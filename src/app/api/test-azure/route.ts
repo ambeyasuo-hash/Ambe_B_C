@@ -28,7 +28,6 @@ export async function POST(request: Request) {
       return Response.json({ ok: true })
     }
 
-    const text = await res.text().catch(() => '')
     return Response.json(
       { error: `Azure エラー (${res.status}): APIキーまたはエンドポイントを確認してください` },
       { status: 400 },

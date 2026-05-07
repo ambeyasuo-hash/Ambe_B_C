@@ -195,6 +195,7 @@ export default function ScanPage() {
   const [newCategoryName, setNewCategoryName] = useState<string | null>(null)
   const [newCategoryError, setNewCategoryError] = useState<string | null>(null)
   const [showBackPrompt, setShowBackPrompt] = useState(true)
+  const deviceOrientation = isPortrait ? 'portrait' : 'landscape'
 
   // ── Orientation ────────────────────────────────────────────────────────────
 
@@ -259,12 +260,17 @@ export default function ScanPage() {
   }, [])
 
   useEffect(() => {
-    if (step === 'camera') {
-      startCamera()
-    } else {
+    const timer = setTimeout(() => {
+      if (step === 'camera') {
+        void startCamera()
+      } else {
+        stopCamera()
+      }
+    }, 0)
+    return () => {
+      clearTimeout(timer)
       stopCamera()
     }
-    return stopCamera
   }, [step, startCamera, stopCamera])
 
   // ── Categories ────────────────────────────────────────────────────────────
@@ -528,6 +534,7 @@ export default function ScanPage() {
     return (
       <div
         className="fixed inset-0 z-50 bg-black select-none"
+        data-device-orientation={deviceOrientation}
         onContextMenu={(e) => e.preventDefault()}
       >
         {/* Camera feed */}
@@ -669,7 +676,7 @@ export default function ScanPage() {
   // ── Preview / Edit / Save screen ───────────────────────────────────────────
 
   return (
-    <div className="flex flex-col min-h-full">
+    <div className="flex flex-col min-h-full" data-device-orientation={deviceOrientation}>
       {/* Sticky header */}
       <div className="sticky top-0 z-10 bg-background/80 backdrop-blur-xl border-b border-white/10
         flex items-center justify-between px-4 py-3">

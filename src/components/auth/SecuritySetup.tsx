@@ -28,7 +28,7 @@ export default function SecuritySetup() {
   const router = useRouter()
   const { unlock } = useVault()
   const [step, setStep] = useState<Step>(1)
-  const [credentialId, setCredentialId] = useState('')
+  const [, setCredentialId] = useState('')
   const [apiConfig, setApiConfig] = useState<ApiConfig>({
     supabaseUrl: '', supabaseKey: '',
     azureEndpoint: '', azureKey: '', geminiKey: '',

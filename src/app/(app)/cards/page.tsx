@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback, useRef } from 'react'
+import { useEffect, useState, useCallback, useRef, useId } from 'react'
 import { useRouter } from 'next/navigation'
 import { motion, AnimatePresence } from 'framer-motion'
 import { getSupabaseClient } from '@/lib/supabase'
@@ -76,9 +76,10 @@ export default function CardsPage() {
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [debouncedQuery, setDebouncedQuery] = useState('')
   const loadRef = useRef<() => Promise<void>>(() => Promise.resolve())
+  const realtimeChannelId = useId()
   // マウントごとにユニークなチャンネル名を生成し、シングルトン Supabase クライアントでの
   // チャンネル名衝突（"cannot add callbacks after subscribe()"）を防ぐ
-  const realtimeChannelName = useRef(`bc-rt-${Math.random().toString(36).slice(2)}`)
+  const realtimeChannelName = useRef(`bc-rt-${realtimeChannelId.replace(/:/g, '')}`)
 
   useEffect(() => {
     if (appState !== 'UNLOCKED') {
@@ -204,7 +205,10 @@ export default function CardsPage() {
   }, [dataKey, bundle, debouncedQuery, selectedCategory, sortKey])
 
   useEffect(() => {
-    load()
+    const timer = setTimeout(() => {
+      void load()
+    }, 0)
+    return () => clearTimeout(timer)
   }, [load])
 
   // loadRef を常に最新の load に更新（Realtime コールバック用）

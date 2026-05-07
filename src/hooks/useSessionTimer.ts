@@ -6,17 +6,20 @@ import { useVault } from '@/context/VaultContext'
 const SESSION_MS = 15 * 60 * 1000
 
 export function useSessionTimer() {
-  const { appState, resetSessionTimer } = useVault()
+  const { appState } = useVault()
   const [remaining, setRemaining] = useState(SESSION_MS)
   const [startedAt, setStartedAt] = useState<number | null>(null)
 
   useEffect(() => {
-    if (appState !== 'UNLOCKED') {
-      setRemaining(SESSION_MS)
-      setStartedAt(null)
-      return
-    }
-    setStartedAt(Date.now())
+    const timer = setTimeout(() => {
+      if (appState !== 'UNLOCKED') {
+        setRemaining(SESSION_MS)
+        setStartedAt(null)
+        return
+      }
+      setStartedAt(Date.now())
+    }, 0)
+    return () => clearTimeout(timer)
   }, [appState])
 
   useEffect(() => {

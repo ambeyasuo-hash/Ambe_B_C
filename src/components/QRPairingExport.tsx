@@ -125,7 +125,10 @@ export default function QRPairingExport({ bundle, onClose }: QRPairingExportProp
   }, [pin, bundle])
 
   useEffect(() => {
-    buildQrPayload()
+    const timer = setTimeout(() => {
+      void buildQrPayload()
+    }, 0)
+    return () => clearTimeout(timer)
   }, [buildQrPayload])
 
   useEffect(() => {

@@ -15,7 +15,7 @@ import {
 } from '@/lib/config-bundle'
 import { unlockWithAlpha } from '@/lib/vault'
 import { useVault } from '@/context/VaultContext'
-import { validateMnemonic24, deriveWrappingKeyFromMnemonic, deriveEncryptionSalt } from '@/lib/mnemonic'
+import { validateMnemonic24, deriveWrappingKeyFromMnemonic } from '@/lib/mnemonic'
 import { generateSearchIndexSecret } from '@/lib/normalize'
 import QRPairingImport from '@/components/QRPairingImport'
 
@@ -53,13 +53,16 @@ export default function LockScreen({ initialMode }: { initialMode?: LockMode }) 
 
   // Check localStorage only on client
   useEffect(() => {
-    const hasCred = hasRegisteredCredential()
-    // alpha bundle は PRF upgrade で後から作られるので credential の有無だけで判定する
-    setCanUseBiometric(hasCred)
-    // クレデンシャルがない端末（QRインポート直後など）は PIN モードで起動
-    if (!hasCred && !initialMode) {
-      setMode('pin')
-    }
+    const timer = setTimeout(() => {
+      const hasCred = hasRegisteredCredential()
+      // alpha bundle は PRF upgrade で後から作られるので credential の有無だけで判定する
+      setCanUseBiometric(hasCred)
+      // クレデンシャルがない端末（QRインポート直後など）は PIN モードで起動
+      if (!hasCred && !initialMode) {
+        setMode('pin')
+      }
+    }, 0)
+    return () => clearTimeout(timer)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 

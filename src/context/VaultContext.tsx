@@ -2,8 +2,7 @@
 
 import { createContext, useContext, useRef, useState, useCallback, useEffect, type ReactNode } from 'react'
 import type { ConfigBundle } from '@/lib/config-bundle'
-import { hasBundleAlpha, hasBundlePIN } from '@/lib/config-bundle'
-import { hasRegisteredCredential } from '@/lib/webauthn'
+import { hasBundlePIN } from '@/lib/config-bundle'
 
 export type AppState = 'UNINITIALIZED' | 'LOCKED' | 'UNLOCKED'
 
@@ -67,13 +66,16 @@ export function VaultProvider({ children }: { children: ReactNode }) {
   // Initialize: determine state from localStorage (client only)
   useEffect(() => {
     if (typeof window === 'undefined') return
-    // PIN bundle がなければ未完了セットアップ → UNINITIALIZED
-    // alpha bundle だけある（セットアップ途中でクラッシュ等）場合も UNINITIALIZED に倒す
-    if (!hasBundlePIN()) {
-      setAppState('UNINITIALIZED')
-    } else {
-      setAppState('LOCKED')
-    }
+    const timer = setTimeout(() => {
+      // PIN bundle がなければ未完了セットアップ → UNINITIALIZED
+      // alpha bundle だけある（セットアップ途中でクラッシュ等）場合も UNINITIALIZED に倒す
+      if (!hasBundlePIN()) {
+        setAppState('UNINITIALIZED')
+      } else {
+        setAppState('LOCKED')
+      }
+    }, 0)
+    return () => clearTimeout(timer)
   }, [])
 
   // Reset session timer on user activity

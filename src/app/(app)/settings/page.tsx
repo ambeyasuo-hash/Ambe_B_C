@@ -120,6 +120,7 @@ function TestButton({ label, onTest }: { label: string; onTest: () => Promise<{ 
     <div className="flex items-center gap-2">
       <button
         onClick={run}
+        aria-label={label}
         disabled={state === 'testing'}
         className="text-xs px-3 py-1.5 rounded-xl border border-white/20 text-muted-foreground
           disabled:opacity-40 hover:bg-white/5 transition-colors"
@@ -190,7 +191,10 @@ export default function SettingsPage() {
 
   const [mnemonicConfirmed, setMnemonicConfirmed] = useState(false)
   useEffect(() => {
-    setMnemonicConfirmed(localStorage.getItem('mnemonic_confirmed') === '1')
+    const timer = setTimeout(() => {
+      setMnemonicConfirmed(localStorage.getItem('mnemonic_confirmed') === '1')
+    }, 0)
+    return () => clearTimeout(timer)
   }, [])
 
   useEffect(() => {
@@ -296,19 +300,25 @@ export default function SettingsPage() {
 
   useEffect(() => {
     if (bundle) {
-      setApiFields({
-        supabaseUrl: bundle.supabase.url,
-        supabaseKey: bundle.supabase.anon_key,
-        azureEndpoint: bundle.azure.endpoint,
-        azureKey: bundle.azure.key,
-        geminiKey: bundle.gemini.key,
-      })
+      const timer = setTimeout(() => {
+        setApiFields({
+          supabaseUrl: bundle.supabase.url,
+          supabaseKey: bundle.supabase.anon_key,
+          azureEndpoint: bundle.azure.endpoint,
+          azureKey: bundle.azure.key,
+          geminiKey: bundle.gemini.key,
+        })
+      }, 0)
+      return () => clearTimeout(timer)
     }
   }, [bundle])
 
   useEffect(() => {
-    setMnemonicWords(localStorage.getItem('mnemonic_words'))
-    setKeepAliveConfirmed(localStorage.getItem('keep_alive_confirmed') === '1')
+    const timer = setTimeout(() => {
+      setMnemonicWords(localStorage.getItem('mnemonic_words'))
+      setKeepAliveConfirmed(localStorage.getItem('keep_alive_confirmed') === '1')
+    }, 0)
+    return () => clearTimeout(timer)
   }, [])
 
   const handleApiSave = useCallback(async () => {

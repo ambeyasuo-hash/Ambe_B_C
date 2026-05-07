@@ -1,6 +1,6 @@
 'use client'
 
-import { deriveWrappingKeyFromSignature, toB64, fromB64 } from './crypto'
+import { toB64, fromB64 } from './crypto'
 
 const RP_NAME = 'あんべの名刺代わり'
 const LS_CREDENTIAL_ID         = 'webauthn_credential_id'

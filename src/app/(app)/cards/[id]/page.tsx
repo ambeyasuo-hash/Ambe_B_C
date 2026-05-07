@@ -183,7 +183,12 @@ export default function CardDetailPage() {
     }
   }, [dataKey, bundle, id])
 
-  useEffect(() => { loadCard() }, [loadCard])
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      void loadCard()
+    }, 0)
+    return () => clearTimeout(timer)
+  }, [loadCard])
 
   useEffect(() => {
     if (!bundle) return

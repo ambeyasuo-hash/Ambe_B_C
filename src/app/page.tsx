@@ -1,7 +1,7 @@
 'use client'
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { motion, AnimatePresence } from 'framer-motion'
+import { motion } from 'framer-motion'
 import { useVault } from '@/context/VaultContext'
 import SecuritySetup from '@/components/auth/SecuritySetup'
 import LockScreen from '@/components/auth/LockScreen'
@@ -72,7 +72,9 @@ export default function Home() {
 
   // UNINITIALIZED に戻ったとき（セットアップ中断 等）選択をリセット
   useEffect(() => {
-    if (appState === 'UNINITIALIZED') setInitChoice(null)
+    if (appState !== 'UNINITIALIZED') return
+    const timer = setTimeout(() => setInitChoice(null), 0)
+    return () => clearTimeout(timer)
   }, [appState])
 
   if (appState === 'UNLOCKED') return null
