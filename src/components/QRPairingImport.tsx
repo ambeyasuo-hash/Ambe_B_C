@@ -328,7 +328,7 @@ export default function QRPairingImport({ onClose }: QRPairingImportProps) {
 
       unlock(dataKey, updatedBundle)
       setStep('done')
-      setTimeout(() => router.replace('/'), 300)
+      setTimeout(() => router.replace('/cards'), 300)
     } catch {
       setAppPinError('アプリのPINが正しくありません')
       setAppPin('')
