@@ -144,6 +144,7 @@ export default function QRPairingImport({ onClose }: QRPairingImportProps) {
   const [appPin, setAppPin] = useState('')    // アプリ PIN（元端末のもの）
   const [appPinError, setAppPinError] = useState('')
   const [decryptedBundle, setDecryptedBundle] = useState<ConfigBundle | null>(null)
+  const [relayCiphertext, setRelayCiphertext] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [cameraError, setCameraError] = useState('')
@@ -180,6 +181,9 @@ export default function QRPairingImport({ onClose }: QRPairingImportProps) {
               const parsed = parseQrScan(result.getText())
               if (parsed?.type === 'payload') {
                 stopCamera()
+                setPin('')
+                setError('')
+                setRelayCiphertext(null)
                 setPayload(parsed.payload)
                 setStep('pin')
               } else if (parsed?.type === 'chunk') {
@@ -192,6 +196,9 @@ export default function QRPairingImport({ onClose }: QRPairingImportProps) {
                 const combinedPayload = buildPayloadFromChunks(chunksRef.current)
                 if (combinedPayload) {
                   stopCamera()
+                  setPin('')
+                  setError('')
+                  setRelayCiphertext(null)
                   setPayload(combinedPayload)
                   setStep('pin')
                 }
@@ -243,27 +250,32 @@ export default function QRPairingImport({ onClose }: QRPairingImportProps) {
         return
       }
 
-      // [2] ct を取得し、DB側で使用済みにする
-      const consumeRes = await fetch('/api/consume-qr-transfer', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          token: payload.token,
-          supabaseUrl: payload.url,
-          supabaseAnonKey: payload.key,
-        }),
-      })
-      const consumeJson = (await consumeRes.json().catch(() => ({}))) as { ct?: string; error?: string }
-      if (!consumeRes.ok || !consumeJson.ct) {
-        setError(consumeJson.error ?? 'QRコードは無効または既に使用済みです')
-        return
+      // [2] ct を取得し、DB側で使用済みにする。取得後はstateに保持し、PIN再試行ではDBを再consumeしない。
+      let ciphertext = relayCiphertext
+      if (!ciphertext) {
+        const consumeRes = await fetch('/api/consume-qr-transfer', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            token: payload.token,
+            supabaseUrl: payload.url,
+            supabaseAnonKey: payload.key,
+          }),
+        })
+        const consumeJson = (await consumeRes.json().catch(() => ({}))) as { ct?: string; error?: string }
+        if (!consumeRes.ok || !consumeJson.ct) {
+          setError(consumeJson.error ?? 'QRコードは無効または既に使用済みです')
+          return
+        }
+        ciphertext = consumeJson.ct
+        setRelayCiphertext(ciphertext)
       }
 
       // [4] salt・iv・ct をデコード
       const decodePayloadB64 = payload.compact ? fromB64Url : fromB64
       const saltBytes = decodePayloadB64(payload.salt)
       const ivBytes   = decodePayloadB64(payload.iv)
-      const ctBytes   = fromB64(consumeJson.ct)
+      const ctBytes   = fromB64(ciphertext)
 
       // [5] QR PIN で wrapping key を導出して復号
       const wrappingKey = await deriveWrappingKeyFromPIN(pin, saltBytes)

@@ -393,7 +393,7 @@ export default function CardsPage() {
               QRペアリングで修復
             </button>
             <button
-              onClick={() => router.push('/lock?mode=recovery')}
+              onClick={() => router.push('/lock?mode=mnemonic')}
               className="rounded-xl bg-red-500/20 px-3 py-1.5 text-xs text-red-300 border border-red-500/30"
             >
               リカバリーフレーズで復元
