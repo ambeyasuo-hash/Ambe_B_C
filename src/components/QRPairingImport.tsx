@@ -25,11 +25,25 @@ interface QrPayload {
   iv: string
   url: string
   key: string
-  exp: string
+  exp?: string
 }
 
 interface QRPairingImportProps {
   onClose?: () => void
+}
+
+function parseQrPayload(text: string): QrPayload | null {
+  if (text.startsWith('AMBE3|')) {
+    const [kind, token, salt, iv, url, key] = text.split('|')
+    if (kind === 'AMBE3' && token && salt && iv && url && key) {
+      return { v: 3, kind: 'qr-relay', token, salt, iv, url, key }
+    }
+    return null
+  }
+
+  const parsed = JSON.parse(text) as QrPayload
+  if (parsed.v === 2 && parsed.kind === 'qr-relay') return parsed
+  return null
 }
 
 export default function QRPairingImport({ onClose }: QRPairingImportProps) {
@@ -68,8 +82,8 @@ export default function QRPairingImport({ onClose }: QRPairingImportProps) {
           if (cancelled) return
           if (result) {
             try {
-              const parsed = JSON.parse(result.getText()) as QrPayload
-              if (parsed.v === 2 && parsed.kind === 'qr-relay') {
+              const parsed = parseQrPayload(result.getText())
+              if (parsed) {
                 stopCamera()
                 setPayload(parsed)
                 setStep('pin')
@@ -116,7 +130,7 @@ export default function QRPairingImport({ onClose }: QRPairingImportProps) {
     setError('')
     try {
       // [1] 期限チェック
-      if (new Date(payload.exp) < new Date()) {
+      if (payload.exp && new Date(payload.exp) < new Date()) {
         setError('QRコードが期限切れです')
         return
       }

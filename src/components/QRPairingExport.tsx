@@ -16,6 +16,10 @@ function generatePin(): string {
   return num.toString().padStart(6, '0')
 }
 
+function toHex(bytes: Uint8Array): string {
+  return Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('')
+}
+
 interface QRPairingExportProps {
   bundle: ConfigBundle
   onClose: () => void
@@ -37,7 +41,7 @@ export default function QRPairingExport({ bundle, onClose }: QRPairingExportProp
       const plaintext = new TextEncoder().encode(JSON.stringify(bundle))
       const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, wrappingKey, plaintext)
 
-      const token = crypto.randomUUID()
+      const token = toHex(randomBytes(16))
       const expiresAt = new Date(Date.now() + EXPIRE_SECONDS * 1000)
 
       const supabase = createClient(bundle.supabase.url, bundle.supabase.anon_key)
@@ -55,17 +59,14 @@ export default function QRPairingExport({ bundle, onClose }: QRPairingExportProp
         return
       }
 
-      const payload = {
-        v: 2,
-        kind: 'qr-relay',
+      setQrData([
+        'AMBE3',
         token,
-        salt: toB64(salt.buffer),
-        iv: toB64(iv.buffer),
-        url: bundle.supabase.url,
-        key: bundle.supabase.anon_key,
-        exp: expiresAt.toISOString(),
-      }
-      setQrData(JSON.stringify(payload))
+        toB64(salt.buffer),
+        toB64(iv.buffer),
+        bundle.supabase.url,
+        bundle.supabase.anon_key,
+      ].join('|'))
     } catch (e) {
       setError(e instanceof Error ? e.message : 'QR生成に失敗しました')
     }
@@ -94,6 +95,7 @@ export default function QRPairingExport({ bundle, onClose }: QRPairingExportProp
   const mm = String(Math.floor(remaining / 60)).padStart(2, '0')
   const ss = String(remaining % 60).padStart(2, '0')
   const pinDigits = pin.split('')
+  const qrBoxStyle = { width: 'min(280px, calc(92vw - 56px))', height: 'min(280px, calc(92vw - 56px))' }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center"
@@ -101,29 +103,31 @@ export default function QRPairingExport({ bundle, onClose }: QRPairingExportProp
       <motion.div
         initial={{ scale: 0.9, opacity: 0 }}
         animate={{ scale: 1, opacity: 1 }}
-        className="flex flex-col items-center gap-5 rounded-3xl p-6 w-[340px]"
-        style={{ background: 'var(--card)', border: '1px solid var(--border)' }}
+        className="flex flex-col items-center gap-5 rounded-3xl p-5"
+        style={{ background: 'var(--card)', border: '1px solid var(--border)', width: 'min(92vw, 380px)' }}
       >
         <h2 className="text-base font-bold" style={{ color: 'var(--foreground)' }}>
           別端末でスキャン
         </h2>
 
-        <div className="rounded-2xl p-3" style={{ background: 'white' }}>
+        <div className="rounded-2xl p-2" style={{ background: 'white' }}>
           {expired ? (
-            <div className="w-[240px] h-[240px] flex flex-col items-center justify-center gap-2">
+            <div className="flex flex-col items-center justify-center gap-2" style={qrBoxStyle}>
               <span style={{ fontSize: '40px' }}>⏱</span>
               <p className="text-sm font-medium text-center" style={{ color: 'oklch(0.2 0 0)' }}>
                 QRコードが期限切れです
               </p>
             </div>
           ) : qrData ? (
-            <QRCodeSVG value={qrData} size={240} level="L" />
+            <div style={qrBoxStyle}>
+              <QRCodeSVG value={qrData} size={280} level="L" marginSize={2} className="w-full h-full" />
+            </div>
           ) : error ? (
-            <div className="w-[240px] h-[240px] flex items-center justify-center">
+            <div className="flex items-center justify-center" style={qrBoxStyle}>
               <p className="text-xs text-center" style={{ color: 'oklch(0.577 0.245 27.325)' }}>{error}</p>
             </div>
           ) : (
-            <div className="w-[240px] h-[240px] flex items-center justify-center">
+            <div className="flex items-center justify-center" style={qrBoxStyle}>
               <p className="text-sm" style={{ color: 'oklch(0.4 0 0)' }}>生成中...</p>
             </div>
           )}
