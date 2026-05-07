@@ -14,6 +14,7 @@ import { buildSearchHashes, buildSearchTokens } from '@/lib/normalize'
 import { fetchCategories, createCategory, type Category } from '@/lib/categories'
 import { reverseGeocode } from '@/lib/geocode'
 import { autoFurigana } from '@/lib/furigana'
+import { ensureFreshBundle, getBundleVaultGeneration } from '@/lib/bundle-health'
 
 type ScanStep = 'camera' | 'preview'
 type CardSide = 'front' | 'back'
@@ -158,7 +159,7 @@ function ScanFABIcon() {
 
 export default function ScanPage() {
   const router = useRouter()
-  const { dataKey, bundle } = useVault()
+  const { dataKey, bundle, updateBundle } = useVault()
   const videoRef = useRef<HTMLVideoElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
@@ -430,6 +431,15 @@ export default function ScanPage() {
     setIsSaving(true)
     setSaveError(null)
     try {
+      const freshResult = await ensureFreshBundle(bundle, { repairLocalSecrets: false })
+      if (freshResult.status === 'KEY_MISMATCH') throw new Error('保存済みVaultと端末設定の暗号saltが一致しません')
+      if (freshResult.status === 'REMOTE_VAULT_MISSING') throw new Error('保存済みVaultが見つかりません')
+      if (freshResult.status === 'CONFIG_CONNECTION_FAILED') throw new Error(freshResult.error ?? 'Vaultの確認に失敗しました')
+      if (freshResult.status === 'STALE_BUNDLE') throw new Error('この端末の設定が古くなっています。再同期または復旧を行ってください')
+      if (freshResult.status === 'MISSING_LOCAL_FIELDS') throw new Error('端末内の設定情報が不足しています。再同期または復旧を行ってください')
+      const bundleForSave = freshResult.bundle
+      if (freshResult.changed) updateBundle(bundleForSave)
+
       // [1] Encrypt PII JSON（位置情報も E2EE 対象として含める）
       const piiJson = JSON.stringify({
         name:       editFields.name,
@@ -460,7 +470,7 @@ export default function ScanPage() {
 
       // [3] Blind indexing via HMAC-SHA256
       const tokens = ocrResult ? buildSearchTokens(ocrResult) : []
-      const search_hashes = await buildSearchHashes(tokens, bundle, { includeLegacy: false })
+      const search_hashes = await buildSearchHashes(tokens, bundleForSave, { includeLegacy: false })
 
       // [4] Resolve category name (system-default → null = 未分類)
       const selectedCat = categories.find((c) => c.id === selectedCategoryId)
@@ -482,9 +492,11 @@ export default function ScanPage() {
           ocr_raw_text: ocrResult?.rawText ?? null,
           ocr_confidence: ocrResult?.confidence ?? 0,
           scanned_at: new Date().toISOString(),
-          encryption_salt: bundle.encryption_salt,
-          supabaseUrl: bundle.supabase.url,
-          supabaseAnonKey: bundle.supabase.anon_key,
+          encryption_salt: bundleForSave.encryption_salt,
+          supabaseUrl: bundleForSave.supabase.url,
+          supabaseAnonKey: bundleForSave.supabase.anon_key,
+          userEmail: bundleForSave.userEmail,
+          vaultGeneration: getBundleVaultGeneration(bundleForSave),
         }),
       })
 
@@ -501,7 +513,7 @@ export default function ScanPage() {
     }
   }, [
     dataKey, bundle, editFields, frontImageBase64, backImageBase64,
-    ocrResult, backOcrResult, categories, selectedCategoryId, router, scanLocation, locationName,
+    ocrResult, backOcrResult, categories, selectedCategoryId, router, scanLocation, locationName, updateBundle,
   ])
 
   // ── Add category inline ────────────────────────────────────────────────────

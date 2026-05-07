@@ -22,6 +22,10 @@ export interface BundleHealthResult {
   error?: string
 }
 
+interface EnsureFreshBundleOptions {
+  repairLocalSecrets?: boolean
+}
+
 interface VaultMetaRow {
   user_email: string | null
   encryption_salt: string
@@ -48,18 +52,22 @@ export function classifyBundleWriteError(error: string): BundleHealthStatus {
   return 'CONFIG_CONNECTION_FAILED'
 }
 
-export async function ensureFreshBundle(bundle: ConfigBundle): Promise<BundleHealthResult> {
+export async function ensureFreshBundle(
+  bundle: ConfigBundle,
+  options: EnsureFreshBundleOptions = {},
+): Promise<BundleHealthResult> {
+  const repairLocalSecrets = options.repairLocalSecrets ?? true
   let nextBundle: ConfigBundle = { ...bundle }
   let changed = false
   let issues: string[] = []
 
-  if (!nextBundle.search_index_secret) {
+  if (repairLocalSecrets && !nextBundle.search_index_secret) {
     nextBundle = { ...nextBundle, search_index_secret: generateSearchIndexSecret() }
     changed = true
     issues = withIssue(issues, 'SEARCH_INDEX_SECRET_ADDED')
   }
 
-  if (!nextBundle.pin_salt) {
+  if (repairLocalSecrets && !nextBundle.pin_salt) {
     const storedPinSalt = getStoredPinSalt()
     if (storedPinSalt) {
       nextBundle = { ...nextBundle, pin_salt: storedPinSalt }

@@ -39,9 +39,9 @@ export async function POST(request: Request) {
       vaultGeneration,
     } = body
 
-    if (!encrypted_data || !supabaseUrl || !supabaseAnonKey) {
+    if (!encrypted_data || !encryption_salt || !supabaseUrl || !supabaseAnonKey || !userEmail) {
       return Response.json(
-        { error: 'encrypted_data, supabaseUrl, supabaseAnonKey は必須です' },
+        { error: 'encrypted_data, encryption_salt, supabaseUrl, supabaseAnonKey, userEmail are required' },
         { status: 400 },
       )
     }
