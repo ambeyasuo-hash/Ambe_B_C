@@ -40,6 +40,27 @@ function supabaseUrlFromAnonKey(key: string): string | null {
   }
 }
 
+function getQrFrames(qrData: string): string[] {
+  if (qrData.startsWith('AMBE4|')) {
+    const [kind, token, salt, iv, keyPart] = qrData.split('|')
+    if (kind === 'AMBE4' && token && salt && iv && keyPart) {
+      const keySegments = keyPart.split('.')
+      if (keySegments.length === 2) {
+        return [
+          ['AMBE5', '1', token, salt, iv].join('|'),
+          ['AMBE5', '2', keySegments[0]].join('|'),
+          ['AMBE5', '3', keySegments[1]].join('|'),
+        ]
+      }
+      return [
+        ['AMBE5', '1', token, salt, iv].join('|'),
+        ['AMBE5', '2', keyPart].join('|'),
+      ]
+    }
+  }
+  return [qrData]
+}
+
 interface QRPairingExportProps {
   bundle: ConfigBundle
   onClose: () => void
@@ -48,6 +69,7 @@ interface QRPairingExportProps {
 export default function QRPairingExport({ bundle, onClose }: QRPairingExportProps) {
   const [pin] = useState(() => generatePin())
   const [qrData, setQrData] = useState<string | null>(null)
+  const [qrPage, setQrPage] = useState(0)
   const [remaining, setRemaining] = useState(EXPIRE_SECONDS)
   const [expired, setExpired] = useState(false)
   const [error, setError] = useState('')
@@ -80,6 +102,7 @@ export default function QRPairingExport({ bundle, onClose }: QRPairingExportProp
       }
 
       const inferredUrl = supabaseUrlFromAnonKey(bundle.supabase.anon_key)
+      setQrPage(0)
       setQrData(inferredUrl
         ? [
             'AMBE4',
@@ -125,6 +148,8 @@ export default function QRPairingExport({ bundle, onClose }: QRPairingExportProp
   const ss = String(remaining % 60).padStart(2, '0')
   const pinDigits = pin.split('')
   const qrBoxStyle = { width: 'min(330px, calc(96vw - 48px))', height: 'min(330px, calc(96vw - 48px))' }
+  const qrFrames = qrData ? getQrFrames(qrData) : []
+  const currentQrData = qrFrames[qrPage] ?? qrFrames[0]
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center"
@@ -147,9 +172,9 @@ export default function QRPairingExport({ bundle, onClose }: QRPairingExportProp
                 QRコードが期限切れです
               </p>
             </div>
-          ) : qrData ? (
+          ) : currentQrData ? (
             <div style={qrBoxStyle}>
-              <QRCodeSVG value={qrData} size={330} level="L" marginSize={2} className="w-full h-full" />
+              <QRCodeSVG value={currentQrData} size={330} level="L" marginSize={2} className="w-full h-full" />
             </div>
           ) : error ? (
             <div className="flex items-center justify-center" style={qrBoxStyle}>
@@ -161,6 +186,26 @@ export default function QRPairingExport({ bundle, onClose }: QRPairingExportProp
             </div>
           )}
         </div>
+
+        {qrFrames.length > 1 && (
+          <div className="flex items-center gap-2">
+            {qrFrames.map((_, index) => (
+              <button
+                key={index}
+                type="button"
+                onClick={() => setQrPage(index)}
+                className="w-12 h-10 rounded-xl text-sm font-bold"
+                style={{
+                  background: qrPage === index ? 'var(--foreground)' : 'var(--background)',
+                  border: '1px solid var(--border)',
+                  color: qrPage === index ? 'var(--background)' : 'var(--foreground)',
+                }}
+              >
+                {index + 1}/{qrFrames.length}
+              </button>
+            ))}
+          </div>
+        )}
 
         <div className="flex flex-col items-center gap-1">
           <p className="text-xs" style={{ color: 'var(--muted-foreground)' }}>PIN（別端末で入力）</p>

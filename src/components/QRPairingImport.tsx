@@ -35,6 +35,19 @@ interface QRPairingImportProps {
   onClose?: () => void
 }
 
+interface QrChunkState {
+  token?: string
+  salt?: string
+  iv?: string
+  keyPart?: string
+  keyPayload?: string
+  keySignature?: string
+}
+
+type QrScanResult =
+  | { type: 'payload'; payload: QrPayload }
+  | { type: 'chunk'; chunk: QrChunkState }
+
 function fromB64Url(s: string): Uint8Array<ArrayBuffer> {
   const b64 = s.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(s.length / 4) * 4, '=')
   return fromB64(b64)
@@ -57,13 +70,30 @@ function supabaseUrlFromAnonKey(key: string): string | null {
   }
 }
 
-function parseQrPayload(text: string): QrPayload | null {
+function parseQrScan(text: string): QrScanResult | null {
+  if (text.startsWith('AMBE5|')) {
+    const [kind, part, ...values] = text.split('|')
+    if (kind === 'AMBE5' && part === '1') {
+      const [token, salt, iv] = values
+      if (token && salt && iv) return { type: 'chunk', chunk: { token, salt, iv } }
+    }
+    if (kind === 'AMBE5' && part === '2') {
+      const [keyPart] = values
+      if (keyPart) return { type: 'chunk', chunk: keyPart.includes('.') ? { keyPart } : { keyPayload: keyPart } }
+    }
+    if (kind === 'AMBE5' && part === '3') {
+      const [keySignature] = values
+      if (keySignature) return { type: 'chunk', chunk: { keySignature } }
+    }
+    return null
+  }
+
   if (text.startsWith('AMBE4|')) {
     const [kind, token, salt, iv, keyPart] = text.split('|')
     const key = expandAnonKey(keyPart ?? '')
     const url = supabaseUrlFromAnonKey(key)
     if (kind === 'AMBE4' && token && salt && iv && url && keyPart) {
-      return { v: 4, kind: 'qr-relay', token, salt, iv, url, key, compact: true }
+      return { type: 'payload', payload: { v: 4, kind: 'qr-relay', token, salt, iv, url, key, compact: true } }
     }
     return null
   }
@@ -71,14 +101,34 @@ function parseQrPayload(text: string): QrPayload | null {
   if (text.startsWith('AMBE3|')) {
     const [kind, token, salt, iv, url, key] = text.split('|')
     if (kind === 'AMBE3' && token && salt && iv && url && key) {
-      return { v: 3, kind: 'qr-relay', token, salt, iv, url, key }
+      return { type: 'payload', payload: { v: 3, kind: 'qr-relay', token, salt, iv, url, key } }
     }
     return null
   }
 
   const parsed = JSON.parse(text) as QrPayload
-  if (parsed.v === 2 && parsed.kind === 'qr-relay') return parsed
+  if (parsed.v === 2 && parsed.kind === 'qr-relay') return { type: 'payload', payload: parsed }
   return null
+}
+
+function buildPayloadFromChunks(chunks: QrChunkState): QrPayload | null {
+  const keyPart = chunks.keyPart ?? (chunks.keyPayload && chunks.keySignature
+    ? `${chunks.keyPayload}.${chunks.keySignature}`
+    : null)
+  if (!chunks.token || !chunks.salt || !chunks.iv || !keyPart) return null
+  const key = expandAnonKey(keyPart)
+  const url = supabaseUrlFromAnonKey(key)
+  if (!url) return null
+  return {
+    v: 5,
+    kind: 'qr-relay',
+    token: chunks.token,
+    salt: chunks.salt,
+    iv: chunks.iv,
+    url,
+    key,
+    compact: true,
+  }
 }
 
 export default function QRPairingImport({ onClose }: QRPairingImportProps) {
@@ -86,7 +136,9 @@ export default function QRPairingImport({ onClose }: QRPairingImportProps) {
   const router = useRouter()
   const videoRef = useRef<HTMLVideoElement>(null)
   const controlsRef = useRef<{ stop: () => void } | null>(null)
+  const chunksRef = useRef<QrChunkState>({})
   const [step, setStep] = useState<ImportStep>('scan')
+  const [chunkCount, setChunkCount] = useState(0)
   const [payload, setPayload] = useState<QrPayload | null>(null)
   const [pin, setPin] = useState('')          // QR ペアリング PIN
   const [appPin, setAppPin] = useState('')    // アプリ PIN（元端末のもの）
@@ -125,11 +177,24 @@ export default function QRPairingImport({ onClose }: QRPairingImportProps) {
           if (cancelled) return
           if (result) {
             try {
-              const parsed = parseQrPayload(result.getText())
-              if (parsed) {
+              const parsed = parseQrScan(result.getText())
+              if (parsed?.type === 'payload') {
                 stopCamera()
-                setPayload(parsed)
+                setPayload(parsed.payload)
                 setStep('pin')
+              } else if (parsed?.type === 'chunk') {
+                chunksRef.current = { ...chunksRef.current, ...parsed.chunk }
+                const nextCount = (chunksRef.current.token && chunksRef.current.salt && chunksRef.current.iv ? 1 : 0)
+                  + (chunksRef.current.keyPart ? 1 : 0)
+                  + (chunksRef.current.keyPayload ? 1 : 0)
+                  + (chunksRef.current.keySignature ? 1 : 0)
+                setChunkCount(nextCount)
+                const combinedPayload = buildPayloadFromChunks(chunksRef.current)
+                if (combinedPayload) {
+                  stopCamera()
+                  setPayload(combinedPayload)
+                  setStep('pin')
+                }
               } else {
                 setError('このQRコードは対応していません')
               }
@@ -320,6 +385,12 @@ export default function QRPairingImport({ onClose }: QRPairingImportProps) {
             <p className="text-sm text-center" style={{ color: 'var(--muted-foreground)' }}>
               既存端末の設定画面に表示されたQRコードをカメラに向けてください
             </p>
+            {chunkCount > 0 && (
+              <div className="rounded-xl px-3 py-2 text-xs font-medium"
+                style={{ background: 'oklch(0.15 0.05 140)', border: '1px solid oklch(0.45 0.15 140)', color: 'var(--foreground)' }}>
+                QR {chunkCount}枚 読み取り済み
+              </div>
+            )}
             {error && (
               <p className="text-sm text-center" style={{ color: 'oklch(0.577 0.245 27.325)' }}>{error}</p>
             )}
