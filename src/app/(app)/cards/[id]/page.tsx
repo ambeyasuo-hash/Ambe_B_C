@@ -353,25 +353,20 @@ export default function CardDetailPage() {
     }
     setGeminiLoading(true)
     try {
-      const { name, company, department, title } = card.pii
-      const industry = card.row.industry_category ?? card.row.card_category ?? '不明'
+      const industry = card.row.industry_category ?? '不明'
       // 制御文字・改行をサニタイズして Gemini プロンプトインジェクションを防ぐ
       const san = (s: string) => s.replace(/[\n\r\x00-\x1f\x7f]/g, ' ').trim().slice(0, 200)
       const prompt = [
         '名刺交換後のお礼メールを日本語で作成してください。',
         '',
-        '【相手の情報】',
-        `氏名：${san(name || '（不明）')}`,
-        `会社名：${san(company || '（不明）')}`,
-        `部署：${san(department || '（不明）')}`,
-        `役職：${san(title || '（不明）')}`,
-        `業界：${san(industry)}`,
+        '【利用できる非個人情報】',
+        `業種・カテゴリ：${san(industry)}`,
         '',
         '【厳守事項】',
+        '- 氏名、会社名、部署名、役職、メールアドレス、電話番号、住所などの個人情報は提供されていません。推測しないこと',
+        '- 宛名や固有名詞を使わず、個人を特定しない自然な文面にすること',
         '- 件名と本文のみを出力すること。解説・コメント・注釈・見出し・箇条書きは一切出力しないこと',
-        '- {{}} 等のプレースホルダーは使わず、上記の情報を本文に直接記載すること',
-        '- 署名欄の氏名・会社名・部署は「（要記入）」とし、メールアドレスは「（要記入）」とすること',
-        '- 出力形式：件名：〇〇 の1行の後に空行、そのまま本文（宛名から署名まで）',
+        '- 出力形式：件名：〇〇 の1行の後に空行、そのまま本文',
       ].join('\n')
       const res = await fetch('/api/gemini', {
         method: 'POST',

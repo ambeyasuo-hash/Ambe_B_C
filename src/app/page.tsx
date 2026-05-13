@@ -175,6 +175,22 @@ export default function Home() {
                   </motion.button>
                 </div>
 
+                <div
+                  className="w-full rounded-xl border px-3 py-2.5 text-[11px] leading-relaxed"
+                  style={{
+                    color: 'var(--muted-foreground)',
+                    borderColor: 'var(--border)',
+                    background: 'var(--card)',
+                  }}
+                >
+                  <p>
+                    名刺画像の読み取りには、設定されたAzure AI Document Intelligence（Azure OCR）を使用します。
+                  </p>
+                  <p className="mt-1">
+                    メールドラフト作成にはGeminiを使用しますが、氏名・会社名・メールアドレス・電話番号・住所などの個人情報は送信しません。
+                  </p>
+                </div>
+
                 {/* 取扱説明書リンク */}
                 <a
                   href={MANUAL_URL}
