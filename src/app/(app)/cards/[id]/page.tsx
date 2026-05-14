@@ -69,6 +69,44 @@ const FIELD_LABELS: Array<{ key: keyof PiiFields; label: string; type: string }>
   { key: 'address', label: '住所', type: 'text' },
 ]
 
+const EMAIL_PLACEHOLDERS: Record<keyof PiiFields, string> = {
+  name: '[[NAME]]',
+  furigana: '[[FURIGANA]]',
+  company: '[[COMPANY]]',
+  department: '[[DEPARTMENT]]',
+  title: '[[TITLE]]',
+  email: '[[EMAIL]]',
+  tel: '[[TEL]]',
+  mobile: '[[MOBILE]]',
+  address: '[[ADDRESS]]',
+}
+
+function applyEmailPlaceholders(draft: string, pii: PiiFields) {
+  const replacements: Record<keyof PiiFields, string> = {
+    name: pii.name || 'ご担当者',
+    furigana: pii.furigana || '',
+    company: pii.company || '',
+    department: pii.department || '',
+    title: pii.title || '',
+    email: pii.email || '',
+    tel: pii.tel || '',
+    mobile: pii.mobile || '',
+    address: pii.address || '',
+  }
+
+  let result = draft
+  for (const [key, placeholder] of Object.entries(EMAIL_PLACEHOLDERS) as Array<[keyof PiiFields, string]>) {
+    result = result.replaceAll(placeholder, replacements[key])
+  }
+
+  return result
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/^[ \t]+/gm, '')
+    .replace(/[ \t]+$/gm, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
 function Toast({ message, onDone }: { message: string; onDone: () => void }) {
   useEffect(() => {
     const t = setTimeout(onDone, 2000)
@@ -362,9 +400,17 @@ export default function CardDetailPage() {
         '【利用できる非個人情報】',
         `業種・カテゴリ：${san(industry)}`,
         '',
+        '【個人情報プレースホルダー】',
+        '- 宛名や本文で必要な場合は、以下のプレースホルダーを文字列どおりに使うこと',
+        `- 氏名：${EMAIL_PLACEHOLDERS.name}`,
+        `- 会社名：${EMAIL_PLACEHOLDERS.company}`,
+        `- 部署名：${EMAIL_PLACEHOLDERS.department}`,
+        `- 役職：${EMAIL_PLACEHOLDERS.title}`,
+        '- メールアドレス、電話番号、住所は本文に含めないこと',
+        '',
         '【厳守事項】',
-        '- 氏名、会社名、部署名、役職、メールアドレス、電話番号、住所などの個人情報は提供されていません。推測しないこと',
-        '- 宛名や固有名詞を使わず、個人を特定しない自然な文面にすること',
+        '- 氏名、会社名、部署名、役職、メールアドレス、電話番号、住所などの実データは提供されていません。推測しないこと',
+        '- プレースホルダーを変更、翻訳、装飾、分解しないこと',
         '- 件名と本文のみを出力すること。解説・コメント・注釈・見出し・箇条書きは一切出力しないこと',
         '- 出力形式：件名：〇〇 の1行の後に空行、そのまま本文',
       ].join('\n')
@@ -376,7 +422,7 @@ export default function CardDetailPage() {
       const json = (await res.json()) as { text?: string; error?: string }
       if (!res.ok) throw new Error(json.error ?? 'Gemini API エラー')
 
-      setGeminiEmail((json.text ?? '').trim())
+      setGeminiEmail(applyEmailPlaceholders(json.text ?? '', card.pii))
       setShowGeminiModal(true)
     } catch (e) {
       setToastMsg(e instanceof Error ? e.message : 'メール生成に失敗しました')
