@@ -429,6 +429,9 @@ export default function SecuritySetup() {
                   className="w-full px-4 py-3 rounded-xl text-sm"
                   style={{ background: 'var(--input)', color: 'var(--foreground)', border: '1px solid var(--border)' }}
                 />
+                <p className="text-xs leading-relaxed" style={{ color: 'var(--muted-foreground)' }}>
+                  先に上のSupabase SQLをSQL Editorで実行してください。この確認ではURLとAnon Keyに加えて、必要なテーブルと権限も確認します。
+                </p>
                 <button
                   onClick={handleTestSupabase}
                   disabled={testStatus.supabase === 'testing'}
@@ -440,8 +443,13 @@ export default function SecuritySetup() {
                       testStatus.supabase === 'fail' ? 'oklch(0.577 0.245 27.325)' : 'var(--foreground)',
                   }}
                 >
-                  {statusIcon('supabase')} {testStatus.supabase === 'testing' ? 'テスト中...' : '接続テスト'}
+                  {statusIcon('supabase')} {testStatus.supabase === 'testing' ? '確認中...' : 'SQL適用後に確認'}
                 </button>
+                {testStatus.supabase === 'fail' && (
+                  <p className="text-xs leading-relaxed" style={{ color: 'oklch(0.577 0.245 27.325)' }}>
+                    確認に失敗しました。URLとAnon Keyが正しい場合は、上のSupabase SQLをこのプロジェクトのSQL Editorで実行してから、もう一度確認してください。
+                  </p>
+                )}
               </div>
 
               {/* Azure inputs */}
