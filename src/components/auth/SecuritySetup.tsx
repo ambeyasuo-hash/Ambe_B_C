@@ -44,6 +44,7 @@ export default function SecuritySetup() {
   const [testStatus, setTestStatus] = useState<Record<string, 'idle' | 'testing' | 'ok' | 'fail'>>({})
   const [pendingDataKey, setPendingDataKey] = useState<CryptoKey | null>(null)
   const [sqlCopied, setSqlCopied] = useState(false)
+  const [azureOcrConsent, setAzureOcrConsent] = useState(false)
 
   // ── Step 1: Register biometric ──────────────────────────────────────────
 
@@ -128,7 +129,8 @@ export default function SecuritySetup() {
     return testStatus.supabase === 'ok' && testStatus.azure === 'ok' &&
       apiConfig.supabaseUrl && apiConfig.supabaseKey &&
       apiConfig.azureEndpoint && apiConfig.azureKey &&
-      userEmail.includes('@')
+      userEmail.includes('@') &&
+      azureOcrConsent
   }
 
   // ── Step 3: Set PIN ─────────────────────────────────────────────────────
@@ -465,6 +467,21 @@ export default function SecuritySetup() {
                   className="w-full px-4 py-3 rounded-xl text-sm"
                   style={{ background: 'var(--input)', color: 'var(--foreground)', border: '1px solid var(--border)' }}
                 />
+                <label
+                  className="flex items-start gap-3 rounded-xl border p-3 text-xs leading-relaxed cursor-pointer"
+                  style={{ color: 'var(--muted-foreground)', borderColor: 'var(--border)', background: 'var(--card)' }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={azureOcrConsent}
+                    onChange={(e) => setAzureOcrConsent(e.target.checked)}
+                    className="mt-0.5 flex-shrink-0"
+                    style={{ accentColor: 'oklch(0.65 0.2 250)', width: '16px', height: '16px' }}
+                  />
+                  <span>
+                    名刺画像をOCR解析のためAzure AI Document Intelligenceへ送信することに同意します。解析結果は確認画面で編集でき、保存時は端末内で暗号化されます。
+                  </span>
+                </label>
                 <button
                   onClick={handleTestAzure}
                   disabled={testStatus.azure === 'testing'}

@@ -184,7 +184,7 @@ export default function Home() {
                   }}
                 >
                   <p>
-                    名刺画像の読み取りには、設定されたAzure AI Document Intelligence（Azure OCR）を使用します。
+                    名刺画像の読み取りでは、OCR解析のため名刺画像を設定されたAzure AI Document Intelligence（Azure OCR）へ送信します。
                   </p>
                   <p className="mt-1">
                     メールドラフト作成では、氏名・会社名などの個人情報をプレースホルダーに置き換えてGeminiに送信し、生成後に端末内で復号済み情報を差し込んで文面を完成させます。
